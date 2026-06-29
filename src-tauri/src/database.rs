@@ -76,10 +76,10 @@ impl Database {
             .pragma("cache_size", "-65536")
             .pragma("temp_store", "MEMORY");
 
-        // 创建连接池
+        // M1 优化：SQLite 单写入模型，5 连接足够；减少内存占用与锁等待
         let pool = SqlitePoolOptions::new()
-            .max_connections(10)
-            .min_connections(2)
+            .max_connections(5)
+            .min_connections(1)
             .connect_with(connect_options)
             .await?;
 

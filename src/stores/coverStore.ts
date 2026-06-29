@@ -113,7 +113,7 @@ async function loadCoverAndColors(path: string | null) {
     // #10 修复：先检查 useSongCover 是否已有 in-flight 请求，避免双倍请求
     const pending = getPendingCoverRequest(path)
     try {
-      cover = pending ? await pending : await api.getSongCoverFull(path)
+      cover = pending ? await pending : await api.getSongCoverLarge(path)
     } catch {
       cover = null
     }

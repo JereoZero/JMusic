@@ -77,11 +77,16 @@ impl FolderScanner {
         let mut scanned = 0usize;
         let mut skipped = 0usize;
 
+        // M5 优化：filter_entry 跳过隐藏目录(.git/.DS_Store)和 NAS 元数据目录(@eaDir)
         // max_depth(50) 限制递归深度，配合 visited 去重防止恶意 symlink 循环或目录爆炸
         for entry in WalkDir::new(folder_path)
             .follow_links(true)
             .max_depth(50)
             .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name();
+                !name.to_string_lossy().starts_with('.') && name != "@eaDir"
+            })
             .filter_map(|e| e.ok())
         {
             let path = entry.path();

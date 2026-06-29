@@ -99,6 +99,11 @@ async function finalizePlayHistory(completed: boolean) {
   })
 }
 
+// M3 优化：setState 节流到 100ms（10fps），与 ProgressBar 内部节流对齐
+// rAF 仍保持 60fps 计算 accumulatedPlayedMs（播放历史精度），但 setState 频率降 6 倍
+let lastSetStateTime = 0
+const SET_STATE_INTERVAL_MS = 100
+
 function updateProgress() {
   const store = usePlayerStore.getState()
   if (!store.isPlaying || !store.currentSong) {
@@ -124,7 +129,11 @@ function updateProgress() {
     animationFrameId = null
     usePlayerStore.setState({ currentTime: maxTime })
   } else {
-    usePlayerStore.setState({ currentTime: newTime })
+    // 节流 setState：100ms 才通知订阅者，减少 83% 的 store 通知开销
+    if (now - lastSetStateTime >= SET_STATE_INTERVAL_MS) {
+      lastSetStateTime = now
+      usePlayerStore.setState({ currentTime: newTime })
+    }
     animationFrameId = requestAnimationFrame(updateProgress)
   }
 }

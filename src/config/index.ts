@@ -7,7 +7,7 @@ export const APP_CONFIG = {
   player: {
     defaultVolume: 0.8,
     progressUpdateInterval: 500,
-    coverCacheSize: 500,
+    coverCacheSize: 200,
     coverCacheTTL: 1000 * 60 * 60,
     volumeStep: 0.1,
     volumeWheelStep: 0.005,

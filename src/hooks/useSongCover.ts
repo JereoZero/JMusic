@@ -79,7 +79,7 @@ export function useSongCover(path: string | undefined) {
     }, PENDING_REQUEST_TTL)
 
     const promise = api
-      .getSongCoverFull(path)
+      .getSongCoverLarge(path)
       .then((coverData) => {
         if (coverData) {
           coverCache.set(path, coverData)
@@ -110,78 +110,6 @@ export function useSongCover(path: string | undefined) {
   }, [path])
 
   return { cover, isLoading }
-}
-
-export function useSongCovers(paths: string[]) {
-  const [covers, setCovers] = useState<Map<string, string | null>>(() => {
-    const initialCovers = new Map<string, string | null>()
-    paths.forEach((path) => {
-      const cached = coverCache.get(path)
-      if (cached) {
-        initialCovers.set(path, cached)
-      }
-    })
-    return initialCovers
-  })
-  const [isLoading, setIsLoading] = useState(false)
-
-  // 用 join 后的字符串作为依赖，避免数组引用变化导致重复请求
-  const pathsKey = paths.join(',')
-
-  useEffect(() => {
-    if (paths.length === 0) {
-      setCovers(new Map())
-      return
-    }
-
-    let cancelled = false
-
-    const cachedCovers = new Map<string, string | null>()
-    const uncachedPaths: string[] = []
-
-    paths.forEach((path) => {
-      const cached = coverCache.get(path)
-      if (cached) {
-        cachedCovers.set(path, cached)
-      } else {
-        uncachedPaths.push(path)
-      }
-    })
-
-    if (uncachedPaths.length === 0) {
-      setCovers(cachedCovers)
-      return
-    }
-
-    setIsLoading(true)
-
-    api
-      .getSongCoversBatch(uncachedPaths)
-      .then((batchResult) => {
-        if (cancelled) return
-        batchResult.forEach((cover, path) => {
-          if (cover) {
-            coverCache.set(path, cover)
-          }
-          cachedCovers.set(path, cover)
-        })
-        setCovers(new Map(cachedCovers))
-        setIsLoading(false)
-      })
-      .catch((e) => {
-        console.error('Failed to load song covers batch:', e)
-        if (cancelled) return
-        setCovers(new Map(cachedCovers))
-        setIsLoading(false)
-      })
-
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathsKey])
-
-  return { covers, isLoading }
 }
 
 export function clearCoverCache() {

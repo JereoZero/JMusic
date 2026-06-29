@@ -39,7 +39,7 @@ export function usePersistedSearch(viewKey: string): [string, (value: string) =>
   return [value, setValue]
 }
 
-export { useSongCover, useSongCovers } from './useSongCover'
+export { useSongCover } from './useSongCover'
 export { useSongSort, getSortIcon } from './useSongSort'
 export type { TitleSortType, AlbumSortType, LikeSortType } from './useSongSort'
 export { useUpdateCheck } from './useUpdateCheck'

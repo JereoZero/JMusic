@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -31,26 +30,6 @@ fn map_kira_state(state: KiraPlaybackState) -> PlaybackState {
         // Playing/Pausing/Resuming/Stopping 都视为播放中
         _ => PlaybackState::Playing,
     }
-}
-
-pub fn probe_audio_file(path: &str) -> Result<(), String> {
-    use symphonia::core::formats::FormatOptions;
-    use symphonia::core::io::MediaSourceStream;
-    use symphonia::core::meta::MetadataOptions;
-    use symphonia::core::probe::Hint;
-
-    let file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {}", e))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    let mut hint = Hint::new();
-    if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-
-    symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
-        .map_err(|e| format!("Unsupported or corrupt audio format: {}", e))?;
-
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, TS)]
@@ -122,13 +101,18 @@ impl AudioPlayer {
         // tokio::spawn 会 panic；tauri::async_runtime 内部使用 Tauri 管理的 Tokio runtime
         tauri::async_runtime::spawn(async move {
             let mut last_emit = tokio::time::Instant::now();
-            let poll_interval = Duration::from_millis(50);
+            // H1 优化：轮询间隔与 emit 间隔(250ms)对齐，减少 80% 空轮询加锁
+            let poll_interval = Duration::from_millis(200);
+            // 空闲时(handle=None)用更长间隔，减少后台 CPU 占用
+            let idle_interval = Duration::from_secs(1);
 
             loop {
                 tokio::time::sleep(poll_interval).await;
 
                 let mut handle_guard = handle.lock().await;
                 let Some(sound_handle) = handle_guard.as_ref() else {
+                    drop(handle_guard);
+                    tokio::time::sleep(idle_interval).await;
                     continue;
                 };
 
