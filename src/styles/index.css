@@ -1,0 +1,130 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary-color: #f97316;
+  --logo-color: #f97316;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 隐藏滚动条 */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* 文字选中 */
+::selection {
+  background: color-mix(in srgb, var(--primary-color) 30%, transparent);
+}
+
+/* 滑块样式 */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: white;
+  margin-top: -4px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease;
+}
+
+input[type='range']::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+/* 焦点样式 — 使用主题色，随主题切换变化 */
+*:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary-color) 50%, transparent);
+  outline-offset: 2px;
+}
+
+/* 禁用文本选择 */
+.select-none {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 等宽数字 */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 播放指示器均衡器条 — 纯 CSS 动画，零 JS 开销 */
+@keyframes equalizer-bar {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1); }
+}
+
+.eq-bar {
+  width: 2px;
+  height: 12px;
+  border-radius: 9999px;
+  transform-origin: center;
+  animation: equalizer-bar 0.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+.eq-bar-delay-1 { animation-duration: 0.5s; animation-delay: 0.1s; }
+.eq-bar-delay-2 { animation-duration: 0.7s; animation-delay: 0.2s; }
+
+/* 设置卡片入场动画 — 纯 CSS，替代 motion.section 避免每张卡片注册 RAF 订阅 */
+@keyframes card-fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-card-in {
+  animation: card-fade-in-up 0.3s ease-out;
+}

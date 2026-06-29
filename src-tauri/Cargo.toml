@@ -1,0 +1,84 @@
+[package]
+name = "jlocal"
+version = "0.9.0"
+edition = "2021"
+
+[dependencies]
+# Tauri 框架
+tauri = { version = "2.0", features = [] }
+tauri-plugin-shell = "2.0"
+tauri-plugin-dialog = "2.0"
+tauri-plugin-fs = "2.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ts-rs = { version = "10", features = ["serde-compat", "chrono-impl"] }
+
+# 异步运行时
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
+
+# 音频处理
+lofty = "0.22"  # 音频元数据解析
+# 使用支持 DSD 的 Symphonia fork（dsd_decoder.rs 通过 kira Decoder trait 接入）
+symphonia = { git = "https://github.com/M0Rf30/Symphonia", branch = "dsd-support", features = ["flac", "mp3", "wav", "ogg", "vorbis", "dsd", "alac", "aac"] }  # 音频解码（支持 seek、DSD、ALAC）
+# kira 音频引擎（cpal 0.17 后端，player.rs 主引擎；解码统一走 DsdDecoder，不用 kira 自带 symphonia）
+kira = { version = "0.12", default-features = false, features = ["cpal"] }
+
+# 数据库 - 使用 sqlx 替代 rusqlite，更好的异步支持
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate", "chrono", "uuid"] }
+
+# 错误处理
+anyhow = "1.0"
+thiserror = "1.0"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 文件扫描
+walkdir = "2.0"
+rayon = "1.10"
+
+# UUID
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# 时间处理
+chrono = { version = "0.4", features = ["serde"] }
+
+# 类型转换
+dirs = "5.0"
+
+# Base64 编码
+base64 = "0.22"
+
+# 编码检测和转换
+chardetng = "0.1"
+encoding_rs = "0.8"
+
+# 图片处理
+image = "0.25"
+
+# MD5 哈希
+md5 = "0.7"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+codegen-units = 1

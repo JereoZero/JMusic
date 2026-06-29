@@ -1,0 +1,81 @@
+#!/bin/bash
+# Git pre-push hook — 确保推送前文档版本与 package.json 同步，
+# 并验证 ts-rs 自动生成的 TypeScript 类型与 Rust 结构体保持一致。
+
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION=$(node -p "require('$PROJECT_DIR/package.json').version")
+EXIT_CODE=0
+
+# ===== 1. 类型生成同步检查 =====
+echo "🔍 Regenerating TypeScript types from Rust..."
+cd "$PROJECT_DIR"
+# 只吞 stdout，保留 stderr：失败时用户能看到真实错误
+if ! npm run gen:types >/dev/null; then
+  echo "❌ npm run gen:types 失败，请检查 Rust 结构体上的 #[ts(export)] 注解"
+  exit 1
+fi
+# 用 git status --porcelain 检查（含 untracked 新文件），比 git diff 更全面
+if [ -n "$(git status --porcelain -- src/types/generated/ 2>/dev/null)" ]; then
+  echo "❌ src/types/generated/ 与 Rust 结构体不一致，存在未提交的类型变更"
+  echo "   请运行 \`npm run gen:types\` 后将生成的文件一并提交"
+  EXIT_CODE=1
+fi
+cd - >/dev/null
+
+# ===== 2. 文档版本同步检查 =====
+echo "🔍 Checking documentation version consistency (v$VERSION)..."
+
+# 检查 docs/DEVELOPMENT_LOG.md
+if grep -q "当前版本" "$PROJECT_DIR/docs/DEVELOPMENT_LOG.md" 2>/dev/null; then
+  if ! grep -q "当前版本.*v$VERSION" "$PROJECT_DIR/docs/DEVELOPMENT_LOG.md"; then
+    echo "❌ docs/DEVELOPMENT_LOG.md 版本号不是 v$VERSION"
+    EXIT_CODE=1
+  fi
+fi
+
+# 检查根目录 DEVELOPMENT_LOG.md
+if [ -f "$PROJECT_DIR/DEVELOPMENT_LOG.md" ]; then
+  if ! grep -q "v$VERSION" "$PROJECT_DIR/DEVELOPMENT_LOG.md" 2>/dev/null; then
+    echo "❌ DEVELOPMENT_LOG.md 未包含 v$VERSION 条目"
+    EXIT_CODE=1
+  fi
+fi
+
+# 检查 CHANGELOG.md
+if ! grep -q "## v$VERSION" "$PROJECT_DIR/CHANGELOG.md" 2>/dev/null; then
+  echo "❌ CHANGELOG.md 缺少 v$VERSION 条目"
+  EXIT_CODE=1
+fi
+
+# 检查 BUGS_HISTORY.md — 必须有对应版本条目
+if [ -f "$PROJECT_DIR/docs/BUGS_HISTORY.md" ]; then
+  if ! grep -q "v$VERSION" "$PROJECT_DIR/docs/BUGS_HISTORY.md" 2>/dev/null; then
+    echo "❌ docs/BUGS_HISTORY.md 未包含 v$VERSION 条目"
+    EXIT_CODE=1
+  fi
+fi
+
+if [ $EXIT_CODE -ne 0 ]; then
+  cat <<EOH
+
+⚠️  文档版本不同步！请先运行以下命令同步：
+
+    bash scripts/sync-docs.sh
+
+然后手动更新以下文件中的 v$VERSION 相关条目：
+  1. jlocal/CHANGELOG.md       — 添加 v$VERSION 更新日志
+  2. jlocal/README.md          — 版本历史中添加 v$VERSION
+  3. jlocal/README-zh.md       — 版本历史中添加 v$VERSION
+  4. docs/DEVELOPMENT_LOG.md   — 添加 v$VERSION 开发记录
+  5. docs/BUGS_HISTORY.md      — 添加 v$VERSION 修复记录
+  6. DEVELOPMENT_LOG.md        — 更新当前版本状态
+
+提交文档更新后再推送。
+
+EOH
+  exit 1
+fi
+
+echo "✅ All docs in sync with v$VERSION"
