@@ -87,7 +87,7 @@ const SongItem = memo(function SongItem({
   return (
     <div
       className={cn(
-        'group grid items-center px-6 py-2',
+        'song-item group grid items-center',
         'rounded-lg transition-all duration-200 cursor-pointer',
         'hover:bg-white/[0.04]',
         isCurrent && 'bg-white/[0.08]',
@@ -95,7 +95,7 @@ const SongItem = memo(function SongItem({
         !isPlayable && 'opacity-50'
       )}
       style={{
-        height: APP_CONFIG.ui.songItemHeight,
+        height: '100%',
         gridTemplateColumns: getSongListGridColumns(columnConfig),
         gap: '16px',
         ...(isSelected
@@ -105,7 +105,7 @@ const SongItem = memo(function SongItem({
       onClick={handleClick}
       onDoubleClick={handlePlay}
     >
-      <div className="flex justify-center items-center text-sm tabular-nums">
+      <div className="flex justify-center items-center text-safe-sm tabular-nums">
         {isSelected ? (
           <div
             className="w-4 h-4 rounded flex items-center justify-center"
@@ -148,21 +148,21 @@ const SongItem = memo(function SongItem({
           </div>
         </div>
         <div className="min-w-0 flex-1 overflow-hidden">
-          <div className="font-medium text-sm truncate flex items-center gap-2">
+          <div className="font-medium text-safe-sm truncate flex items-center gap-2">
             <span style={{ color: isCurrent ? primaryColor : undefined }}>{song.title}</span>
             {!isPlayable && (
-              <span className="flex items-center gap-1 text-xs text-red-400 bg-red-400/10 px-2 py-0.5 rounded-md flex-shrink-0">
+              <span className="flex items-center gap-1 text-safe-xs text-red-400 bg-red-400/10 px-2 py-0.5 rounded-md flex-shrink-0">
                 <AlertCircle size={12} />
                 不支持
               </span>
             )}
           </div>
-          <div className="text-sm text-zinc-500 truncate">{song.artist || '未知歌手'}</div>
+          <div className="text-safe-sm text-zinc-500 truncate">{song.artist || '未知歌手'}</div>
         </div>
       </div>
 
       <div className="hidden md:block overflow-hidden">
-        <span className="text-sm text-zinc-600 truncate block">{song.album || '-'}</span>
+        <span className="text-safe-sm text-zinc-600 truncate block">{song.album || '-'}</span>
       </div>
 
       {columnConfig.showLike && (
@@ -210,7 +210,7 @@ const SongItem = memo(function SongItem({
       )}
 
       <div className="flex justify-center items-center">
-        <span className="text-sm text-zinc-600 tabular-nums">{formatDuration(song.duration)}</span>
+        <span className="text-safe-sm text-zinc-600 tabular-nums">{formatDuration(song.duration)}</span>
       </div>
     </div>
   )

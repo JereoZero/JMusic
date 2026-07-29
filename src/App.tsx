@@ -20,6 +20,7 @@ import { useTheme } from './hooks/useTheme'
 import * as api from './api/modules'
 import { createErrorHandler } from './utils/errorHandler'
 import { useDragRegion } from './hooks/useDragRegion'
+import { useUiStore, UI_SCALE_CONFIG } from './stores/uiStore'
 import type { ViewType } from './types'
 
 function AppContent() {
@@ -28,6 +29,13 @@ function AppContent() {
   const previousViewRef = useRef<ViewType>('liked')
   const [showLyrics, setShowLyrics] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
+
+  // 界面缩放：调整 <html> font-size，Tailwind rem 单位随之等比缩放
+  const uiScale = useUiStore((s) => s.scale)
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${UI_SCALE_CONFIG[uiScale].rootFontSize}px`
+    document.documentElement.dataset.uiScale = uiScale
+  }, [uiScale])
 
   // 启用全局窗口拖动（macOS titleBarStyle=Overlay 模式）
   useDragRegion()
@@ -72,7 +80,9 @@ function AppContent() {
       }
     }
     loadData()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [fetchSongs, fetchLikedPaths, fetchHiddenPaths])
 
   useEffect(() => {
@@ -147,7 +157,7 @@ function AppContent() {
     'right',
     () => {
       const { currentTime, duration, currentSong } = usePlayerStore.getState()
-      if (currentSong) seek(Math.min(duration, currentTime + 5))
+      if (currentSong) seek(Math.min(duration, currentTime + APP_CONFIG.player.seekStepSecs))
     },
     { preventDefault: true, enableOnFormTags: false },
     [seek]
@@ -267,9 +277,7 @@ function AppContent() {
             onShowShortcuts={handleShowShortcuts}
             bgColor={sidebarBgColor}
           />
-          <main className="flex-1 overflow-hidden">
-            {renderView()}
-          </main>
+          <main className="flex-1 overflow-hidden">{renderView()}</main>
         </div>
 
         <PlayerBar onToggleLyrics={handleToggleLyrics} />

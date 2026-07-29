@@ -1,7 +1,9 @@
-use std::path::{Path, PathBuf};
+use crate::constants::{
+    is_playable_extension, ENCRYPTED_AUDIO_EXTENSIONS, NORMAL_AUDIO_EXTENSIONS,
+};
 #[cfg(windows)]
 use std::path::Component;
-use crate::constants::{is_playable_extension, NORMAL_AUDIO_EXTENSIONS, ENCRYPTED_AUDIO_EXTENSIONS};
+use std::path::{Path, PathBuf};
 
 /// 获取音乐文件夹内所有符号链接的 canonicalize 目标（二级文件夹白名单）
 /// 用于安全校验：只允许通过已注册的二级文件夹符号链接访问外部目录
@@ -52,9 +54,7 @@ fn path_starts_with_ci(path: &Path, base: &Path) -> bool {
             .iter()
             .zip(base_comps.iter())
             .all(|(p, b)| {
-                p.as_os_str()
-                    .to_string_lossy()
-                    .to_lowercase()
+                p.as_os_str().to_string_lossy().to_lowercase()
                     == b.as_os_str().to_string_lossy().to_lowercase()
             })
     }
@@ -66,7 +66,11 @@ fn path_starts_with_ci(path: &Path, base: &Path) -> bool {
 
 /// 检查路径是否在音乐文件夹内（安全校验：canonicalize 后必须在 music_folder 或已注册的二级文件夹目标内）
 /// secondary_targets: 二级文件夹符号链接的 canonicalize 目标列表，通过 get_secondary_targets 获取
-pub fn is_path_in_music_folder(path_str: &str, music_folder: &str, secondary_targets: &[PathBuf]) -> bool {
+pub fn is_path_in_music_folder(
+    path_str: &str,
+    music_folder: &str,
+    secondary_targets: &[PathBuf],
+) -> bool {
     let path = Path::new(path_str);
     let music_path = match Path::new(music_folder).canonicalize() {
         Ok(p) => p,
@@ -358,7 +362,10 @@ mod tests {
         let (_dir, music, _external) = create_test_tree();
         let music_str = music.to_string_lossy().to_string();
         let targets = get_secondary_targets(&music_str);
-        assert!(targets.is_empty(), "expected no secondary targets without symlinks");
+        assert!(
+            targets.is_empty(),
+            "expected no secondary targets without symlinks"
+        );
     }
 
     // ===== 二级文件夹符号链接白名单（Unix only，Windows symlink 需要权限）=====

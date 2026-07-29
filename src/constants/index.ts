@@ -26,7 +26,11 @@ export const AUDIO_FORMATS = {
   all: [] as readonly string[],
 } as const
 
-const _allFormats = [...AUDIO_FORMATS.normal, ...AUDIO_FORMATS.encrypted, ...AUDIO_FORMATS.unsupported]
+const _allFormats = [
+  ...AUDIO_FORMATS.normal,
+  ...AUDIO_FORMATS.encrypted,
+  ...AUDIO_FORMATS.unsupported,
+]
 Object.defineProperty(AUDIO_FORMATS, 'all', { value: _allFormats })
 
 export function isAudioFormat(ext: string): boolean {

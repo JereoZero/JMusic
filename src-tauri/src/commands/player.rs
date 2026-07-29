@@ -1,10 +1,10 @@
 use tauri::State;
 
+use super::common::{get_music_folder_and_targets, ApiResponse};
 use crate::database::Database;
-use crate::player::AudioPlayer;
 use crate::metadata::MetadataExtractor;
 use crate::path_validator::{is_path_in_music_folder, validate_audio_extension};
-use super::common::{ApiResponse, get_music_folder_and_targets};
+use crate::player::AudioPlayer;
 use rayon::prelude::*;
 
 #[tauri::command]
@@ -86,8 +86,8 @@ pub async fn seek_song(
         return Ok(ApiResponse::err("Invalid seek time"));
     }
     // 校验上界：不允许 seek 超过当前歌曲 duration
-    let state = player.get_state().await;
-    if let Some(duration) = state.duration {
+    // 用轻量 get_duration() 替代 get_state()，避免 handle lock + kira 同步 + clone
+    if let Some(duration) = player.get_duration().await {
         if duration > 0.0 && time > duration {
             return Ok(ApiResponse::err("Seek time exceeds duration"));
         }
@@ -129,7 +129,7 @@ pub async fn get_metadata(
     if !validate_audio_extension(&path) {
         return Ok(ApiResponse::err("Invalid audio file format"));
     }
-    
+
     let (music_folder, secondary_targets) = match get_music_folder_and_targets(&db).await {
         Ok(v) => v,
         Err(e) => return Ok(ApiResponse::err(e)),
@@ -140,7 +140,7 @@ pub async fn get_metadata(
     }
 
     let extractor = MetadataExtractor::new();
-    
+
     match extractor.extract(&path).await {
         Ok(metadata) => Ok(ApiResponse::ok(metadata)),
         Err(e) => Ok(ApiResponse::err(e.to_string())),
@@ -158,7 +158,8 @@ pub async fn get_metadata_batch(
     if paths.len() > METADATA_BATCH_LIMIT {
         return Ok(ApiResponse::err(format!(
             "单次最多处理 {} 个文件，当前收到 {} 个",
-            METADATA_BATCH_LIMIT, paths.len()
+            METADATA_BATCH_LIMIT,
+            paths.len()
         )));
     }
 
@@ -178,7 +179,9 @@ pub async fn get_metadata_batch(
                     .map(|metadata| BatchMetadata { path, metadata })
             })
             .collect::<Vec<_>>()
-    }).await.map_err(|e| e.to_string())?;
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(ApiResponse::ok(results))
 }

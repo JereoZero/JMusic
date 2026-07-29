@@ -24,21 +24,8 @@ export async function deleteSong(path: string): Promise<void> {
   await invokeApi<void>('delete_song', { path })
 }
 
-export async function getSongCover(path: string): Promise<string | null> {
-  return (await invokeApi<string | null>('get_song_cover', { path })) ?? null
-}
-
 export async function getSongCoverLarge(path: string): Promise<string | null> {
   return (await invokeApi<string | null>('get_song_cover_large', { path })) ?? null
-}
-
-export async function getSongCoverFull(path: string): Promise<string | null> {
-  return (await invokeApi<string | null>('get_song_cover_full', { path })) ?? null
-}
-
-export async function getSongCoversBatch(paths: string[]): Promise<Map<string, string | null>> {
-  const data = await invokeApi<Record<string, string | null>>('get_song_covers_batch', { paths })
-  return new Map(Object.entries(data ?? {}))
 }
 
 export async function getThumbnailInfo(): Promise<ThumbnailInfo> {

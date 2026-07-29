@@ -4,6 +4,7 @@ import { useThemeStore } from '../../stores/themeStore'
 import { THEMES } from '../../config/themes'
 import { usePlayerStore } from '../../stores/playerStore'
 import { APP_CONFIG } from '../../config'
+import { cn } from '../../utils/cn'
 
 interface ProgressBarProps {
   duration: number
@@ -104,8 +105,50 @@ function ProgressBar({ duration, onSeek }: ProgressBarProps) {
     (e: WheelEvent) => {
       e.preventDefault()
       if (duration <= 0) return
-      const newTime = Math.max(0, Math.min(duration, displayTime + (e.deltaY > 0 ? -APP_CONFIG.player.seekWheelStepSecs : APP_CONFIG.player.seekWheelStepSecs)))
+      const newTime = Math.max(
+        0,
+        Math.min(
+          duration,
+          displayTime +
+            (e.deltaY > 0
+              ? -APP_CONFIG.player.seekWheelStepSecs
+              : APP_CONFIG.player.seekWheelStepSecs)
+        )
+      )
       handleSeek(newTime)
+    },
+    [duration, displayTime, handleSeek]
+  )
+
+  // 键盘无障碍：←/→ ±5s，Ctrl+←/→ ±10%，Home/End 跳首尾
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (duration <= 0) return
+      const bigStep = duration * 0.1
+      switch (e.key) {
+        case 'ArrowLeft':
+          e.preventDefault()
+          handleSeek(
+            displayTime - (e.ctrlKey || e.metaKey ? bigStep : APP_CONFIG.player.seekStepSecs)
+          )
+          break
+        case 'ArrowRight':
+          e.preventDefault()
+          handleSeek(
+            displayTime + (e.ctrlKey || e.metaKey ? bigStep : APP_CONFIG.player.seekStepSecs)
+          )
+          break
+        case 'Home':
+          e.preventDefault()
+          handleSeek(0)
+          break
+        case 'End':
+          e.preventDefault()
+          handleSeek(duration)
+          break
+        default:
+          break
+      }
     },
     [duration, displayTime, handleSeek]
   )
@@ -157,35 +200,49 @@ function ProgressBar({ duration, onSeek }: ProgressBarProps) {
 
   return (
     <div className="w-full flex items-center gap-2">
-      <span className="text-xs text-gray-400 w-10 text-right select-none">
+      <span className="text-xs text-zinc-400 w-10 text-right select-none">
         {formatDuration(displayTime)}
       </span>
       <div
         ref={progressRef}
-        className="flex-1 h-6 flex items-center cursor-pointer group py-2 -my-2"
+        className="flex-1 h-6 flex items-center cursor-pointer group py-2 -my-2 rounded"
         onClick={handleClick}
         onMouseDown={handleMouseDown}
+        onKeyDown={handleKeyDown}
         role="slider"
         aria-label="播放进度"
         aria-valuemin={0}
         aria-valuemax={duration}
         aria-valuenow={Math.floor(displayTime)}
         aria-valuetext={`${formatDuration(displayTime)} / ${formatDuration(duration)}`}
+        aria-keyshortcuts="ArrowLeft ArrowRight Home End"
         tabIndex={0}
       >
-        <div className="w-full h-1 bg-[#4a4a4a] rounded-full relative">
+        <div
+          className={cn(
+            'w-full rounded-full relative transition-[height] duration-150 ease-out',
+            isDragging ? 'h-1.5' : 'h-1 group-hover:h-1.5'
+          )}
+          style={{ backgroundColor: 'var(--track-bg)' }}
+        >
           <div
             className="h-full rounded-full relative"
             style={{ ...trackStyle, width: `${progress}%` }}
           >
             <div
-              className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+              className={cn(
+                'absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full',
+                'transition-[opacity,transform] duration-150',
+                isDragging
+                  ? 'opacity-100 scale-110'
+                  : 'opacity-0 group-hover:opacity-100 group-hover:scale-110'
+              )}
               style={thumbStyle}
             />
           </div>
         </div>
       </div>
-      <span className="text-xs text-gray-400 w-10 select-none">{formatDuration(duration)}</span>
+      <span className="text-xs text-zinc-400 w-10 select-none">{formatDuration(duration)}</span>
     </div>
   )
 }

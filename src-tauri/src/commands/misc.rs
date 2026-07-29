@@ -1,18 +1,21 @@
+use super::common::ApiResponse;
 use tauri::AppHandle;
 use tauri::Manager;
-use super::common::ApiResponse;
 
 #[tauri::command]
 pub async fn select_folder(app: AppHandle) -> Result<ApiResponse<Option<String>>, String> {
     use tauri_plugin_dialog::DialogExt;
-    
-    let folder_path: Option<tauri_plugin_dialog::FilePath> = tokio::task::spawn_blocking(move || {
-        app.dialog()
-            .file()
-            .set_title("选择音乐文件夹")
-            .blocking_pick_folder()
-    }).await.map_err(|e| e.to_string())?;
-    
+
+    let folder_path: Option<tauri_plugin_dialog::FilePath> =
+        tokio::task::spawn_blocking(move || {
+            app.dialog()
+                .file()
+                .set_title("选择音乐文件夹")
+                .blocking_pick_folder()
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
     let result = folder_path.map(|p| match p {
         tauri_plugin_dialog::FilePath::Path(path_buf) => path_buf.to_string_lossy().to_string(),
         tauri_plugin_dialog::FilePath::Url(url) => url
@@ -20,7 +23,7 @@ pub async fn select_folder(app: AppHandle) -> Result<ApiResponse<Option<String>>
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| url.to_string()),
     });
-    
+
     Ok(ApiResponse::ok(result))
 }
 
@@ -51,7 +54,7 @@ pub async fn get_lyrics(
     if !crate::path_validator::is_path_in_music_folder(&path, &music_folder, &secondary_targets) {
         return Ok(ApiResponse::err("Access denied: path outside music folder"));
     }
-    
+
     let audio_path = std::path::PathBuf::from(path);
     let lyrics = tokio::task::spawn_blocking(move || crate::lyrics::get_lyrics(&audio_path))
         .await
@@ -66,13 +69,13 @@ pub async fn get_lyrics(
 #[tauri::command]
 pub async fn get_primary_music_folder(app: AppHandle) -> Result<ApiResponse<String>, String> {
     let db = app.state::<crate::database::Database>();
-    
+
     if let Ok(Some(custom_folder)) = db.get_setting("music_folder").await {
         if !custom_folder.is_empty() && std::path::Path::new(&custom_folder).exists() {
             return Ok(ApiResponse::ok(custom_folder));
         }
     }
-    
+
     let music_folder = crate::paths::ensure_music_folder_exists(&app)?;
     let folder_str = music_folder.to_string_lossy().to_string();
 
@@ -134,7 +137,13 @@ pub async fn add_secondary_folder(
         #[cfg(windows)]
         {
             std::process::Command::new("cmd")
-                .args(&["/C", "mklink", "/J", &link_path.to_string_lossy(), &absolute_target.to_string_lossy()])
+                .args(&[
+                    "/C",
+                    "mklink",
+                    "/J",
+                    &link_path.to_string_lossy(),
+                    &absolute_target.to_string_lossy(),
+                ])
                 .output()
                 .map_err(|e| format!("创建 junction 失败: {}", e))?;
         }
@@ -186,8 +195,7 @@ pub async fn remove_secondary_folder(
             if !file_type.is_symlink() {
                 return Err("指定的路径不是符号链接".to_string());
             }
-            std::fs::remove_file(&link_path)
-                .map_err(|e| format!("删除符号链接失败: {}", e))?;
+            std::fs::remove_file(&link_path).map_err(|e| format!("删除符号链接失败: {}", e))?;
         }
 
         #[cfg(windows)]
@@ -196,8 +204,7 @@ pub async fn remove_secondary_folder(
                 std::fs::remove_dir(&link_path)
                     .map_err(|e| format!("删除 junction 失败: {}", e))?;
             } else if file_type.is_symlink() {
-                std::fs::remove_file(&link_path)
-                    .map_err(|e| format!("删除符号链接失败: {}", e))?;
+                std::fs::remove_file(&link_path).map_err(|e| format!("删除符号链接失败: {}", e))?;
             } else {
                 return Err("指定的路径不是符号链接或 junction".to_string());
             }
@@ -212,50 +219,51 @@ pub async fn remove_secondary_folder(
 }
 
 #[tauri::command]
-pub async fn get_secondary_folders(app: AppHandle) -> Result<ApiResponse<Vec<(String, String)>>, String> {
+pub async fn get_secondary_folders(
+    app: AppHandle,
+) -> Result<ApiResponse<Vec<(String, String)>>, String> {
     let primary_folder = crate::paths::get_music_folder_path(&app)?;
-    
+
     let folders = tokio::task::spawn_blocking(move || {
         if !primary_folder.exists() {
             return Ok::<_, String>(Vec::new());
         }
-        
+
         let mut folders = Vec::new();
-        
-        for entry in std::fs::read_dir(&primary_folder)
-            .map_err(|e| e.to_string())? {
+
+        for entry in std::fs::read_dir(&primary_folder).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let path = entry.path();
-            
-            let metadata = std::fs::symlink_metadata(&path)
-                .map_err(|e| e.to_string())?;
+
+            let metadata = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
             let file_type = metadata.file_type();
-            
+
             #[cfg(unix)]
             let is_link = file_type.is_symlink();
-            
+
             #[cfg(windows)]
             let is_link = file_type.is_symlink() || file_type.is_dir();
-            
+
             if is_link {
-                let name = path.file_name()
+                let name = path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown")
                     .to_string();
-                
+
                 let target = std::fs::read_link(&path)
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|_| "unknown".to_string());
-                
+
                 folders.push((name, target));
             }
         }
-        
+
         Ok(folders)
     })
     .await
     .map_err(|e| e.to_string())??;
-    
+
     Ok(ApiResponse::ok(folders))
 }
 
@@ -269,11 +277,21 @@ fn is_sensitive_path(path: &std::path::Path) -> bool {
     let path_str = path.to_string_lossy();
     // 同时列出 symlink 形式与 canonicalize 后的形式，覆盖 macOS /private 前缀
     let sensitive_prefixes: &[&str] = &[
-        "/etc", "/private/etc",
-        "/var", "/private/var",
-        "/tmp", "/private/tmp",
-        "/System", "/usr", "/bin", "/sbin",
-        "/dev", "/proc", "/sys", "/boot", "/lib",
+        "/etc",
+        "/private/etc",
+        "/var",
+        "/private/var",
+        "/tmp",
+        "/private/tmp",
+        "/System",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/dev",
+        "/proc",
+        "/sys",
+        "/boot",
+        "/lib",
     ];
 
     for prefix in sensitive_prefixes {

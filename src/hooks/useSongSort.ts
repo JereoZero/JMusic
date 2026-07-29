@@ -17,8 +17,15 @@ const SORT_KEY = 'jlocal_sort_'
 
 // 合法排序值白名单，用于校验 sessionStorage 读取的值
 const VALID_SORTS = new Set([
-  'default', 'title-asc', 'title-desc', 'artist-asc', 'artist-desc',
-  'album-asc', 'album-desc', 'liked-first', 'unliked-first',
+  'default',
+  'title-asc',
+  'title-desc',
+  'artist-asc',
+  'artist-desc',
+  'album-asc',
+  'album-desc',
+  'liked-first',
+  'unliked-first',
 ])
 
 function readStoredSort<T extends string>(key: string, fallback: T): T {

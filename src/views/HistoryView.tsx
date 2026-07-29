@@ -23,16 +23,17 @@ export default function HistoryView() {
 
   const currentSongPath = usePlayerStore((s) => s.currentSong?.path) ?? null
   const playSong = usePlayerStore((s) => s.playSong)
-  const { likedPaths, hiddenPaths, toggleLike, toggleHidden, batchToggleLike, batchToggleHidden } = useLibraryStore(
-    useShallow((s) => ({
-      likedPaths: s.likedPaths,
-      hiddenPaths: s.hiddenPaths,
-      toggleLike: s.toggleLike,
-      toggleHidden: s.toggleHidden,
-      batchToggleLike: s.batchToggleLike,
-      batchToggleHidden: s.batchToggleHidden,
-    }))
-  )
+  const { likedPaths, hiddenPaths, toggleLike, toggleHidden, batchToggleLike, batchToggleHidden } =
+    useLibraryStore(
+      useShallow((s) => ({
+        likedPaths: s.likedPaths,
+        hiddenPaths: s.hiddenPaths,
+        toggleLike: s.toggleLike,
+        toggleHidden: s.toggleHidden,
+        batchToggleLike: s.batchToggleLike,
+        batchToggleHidden: s.batchToggleHidden,
+      }))
+    )
 
   // 统一的加载函数，带竞态保护（防止快速刷新或卸载后 setState）
   const loadPlayHistory = useCallback(async () => {
@@ -126,6 +127,7 @@ export default function HistoryView() {
         emptyIcon={<Music size={48} className="mb-4 opacity-50" />}
         emptyTitle="暂无播放历史"
         emptyDescription="播放歌曲后会自动记录"
+        isLoading={isLoading}
       />
     </div>
   )

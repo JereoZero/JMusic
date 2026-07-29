@@ -24,7 +24,13 @@ interface NavItemProps {
 
 // M11 修复：memo 包裹 NavItem，仅当自身 props 变化时重渲染
 // 避免 Sidebar 因 bgColor 变化（切歌）导致所有 NavItem 重渲染
-const NavItem = memo(function NavItem({ icon: Icon, label, active, onClick, primaryColor }: NavItemProps) {
+const NavItem = memo(function NavItem({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+  primaryColor,
+}: NavItemProps) {
   return (
     <button
       onClick={onClick}
@@ -32,9 +38,7 @@ const NavItem = memo(function NavItem({ icon: Icon, label, active, onClick, prim
         'w-full flex items-center gap-3 px-3 py-3 rounded-xl',
         'transition-all duration-200 select-none',
         'hover:text-white',
-        active
-          ? 'font-semibold'
-          : 'text-zinc-400 hover:bg-white/5'
+        active ? 'font-semibold' : 'text-zinc-400 hover:bg-white/5'
       )}
       style={
         active
@@ -96,10 +100,7 @@ const Sidebar = memo(function Sidebar({
       }}
     >
       {/* Logo - 同时作为窗口拖动区域（macOS titleBarStyle=Overlay 时需要） */}
-      <div
-        className="flex items-center gap-3 px-3 py-5 mb-3"
-        data-drag-region
-      >
+      <div className="flex items-center gap-3 px-3 py-5 mb-3" data-drag-region>
         <img
           src="/logo.png"
           alt="Jlocal"
@@ -132,15 +133,15 @@ const Sidebar = memo(function Sidebar({
           <button
             onClick={onShowShortcuts}
             className={cn(
-              'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl',
+              'w-full flex items-center gap-3 px-3 py-3 rounded-xl',
               'transition-all duration-200 select-none',
               'text-zinc-400 hover:text-white hover:bg-white/5'
             )}
             aria-label="键盘快捷键"
             title="键盘快捷键 (⌘/)"
           >
-            <Keyboard size={20} strokeWidth={2} />
-            <span className="text-sm">快捷键</span>
+            <Keyboard size={22} strokeWidth={2} />
+            <span className="text-[15px]">快捷键</span>
           </button>
         )}
         <NavItem

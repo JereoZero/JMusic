@@ -16,12 +16,12 @@ mod scanner;
 mod thumbnail;
 
 use tauri::Manager;
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 
 #[cfg(target_os = "macos")]
 fn set_dark_window_appearance(window: &tauri::WebviewWindow) {
-    use objc2::msg_send;
     use objc2::class;
+    use objc2::msg_send;
     use objc2_foundation::ns_string;
 
     let ns_window = match window.ns_window() {
@@ -103,11 +103,17 @@ fn main() {
                                 let music_dir_clone = music_dir.clone();
                                 if let Err(e) = tokio::task::spawn_blocking(move || {
                                     std::fs::create_dir_all(&music_dir_clone)
-                                }).await {
+                                })
+                                .await
+                                {
                                     error!("Failed to create music directory task: {}", e);
                                 }
                                 if let Err(e) = tokio::fs::metadata(&music_dir).await {
-                                    error!("Failed to create music directory '{}': {}", music_dir.display(), e);
+                                    error!(
+                                        "Failed to create music directory '{}': {}",
+                                        music_dir.display(),
+                                        e
+                                    );
                                 }
                                 if let Err(e) = db.set_setting("music_folder", &folder).await {
                                     error!("Failed to persist default music_folder setting: {}", e);
@@ -141,11 +147,17 @@ fn main() {
 
                     // 2. 扫描新歌曲（增量：跳过 mtime 未变的文件）
                     let existing_mtimes = db.get_all_song_mtimes().await.unwrap_or_else(|e| {
-                        tracing::warn!("Failed to load existing mtimes, falling back to full scan: {}", e);
+                        tracing::warn!(
+                            "Failed to load existing mtimes, falling back to full scan: {}",
+                            e
+                        );
                         Default::default()
                     });
                     let scanner = scanner::FolderScanner::new();
-                    match scanner.scan(&music_folder, &existing_mtimes, app_handle.clone()).await {
+                    match scanner
+                        .scan(&music_folder, &existing_mtimes, app_handle.clone())
+                        .await
+                    {
                         Ok(mut result) => {
                             info!(
                                 "Scan completed. Normal: {}, Encrypted: {}",
@@ -157,7 +169,10 @@ fn main() {
                             if !result.normal_songs.is_empty() {
                                 match db.upsert_songs(result.normal_songs).await {
                                     Ok((inserted, errors)) => {
-                                        info!("Saved {} normal songs to database ({}) errors", inserted, errors);
+                                        info!(
+                                            "Saved {} normal songs to database ({}) errors",
+                                            inserted, errors
+                                        );
                                     }
                                     Err(e) => {
                                         error!("Failed to save normal songs: {}", e);
@@ -173,16 +188,28 @@ fn main() {
                                     .iter()
                                     .map(|s| s.path.clone())
                                     .collect();
-                                match db.upsert_songs(std::mem::take(&mut result.encrypted_songs)).await {
+                                match db
+                                    .upsert_songs(std::mem::take(&mut result.encrypted_songs))
+                                    .await
+                                {
                                     Ok((inserted, errors)) => {
-                                        info!("Saved {} encrypted songs to database ({}) errors", inserted, errors);
+                                        info!(
+                                            "Saved {} encrypted songs to database ({}) errors",
+                                            inserted, errors
+                                        );
 
                                         match db.hide_songs_batch(encrypted_paths, true).await {
                                             Ok(hidden_count) => {
-                                                info!("Auto-hidden {} encrypted songs", hidden_count);
+                                                info!(
+                                                    "Auto-hidden {} encrypted songs",
+                                                    hidden_count
+                                                );
                                             }
                                             Err(e) => {
-                                                error!("Failed to auto-hide encrypted songs: {}", e);
+                                                error!(
+                                                    "Failed to auto-hide encrypted songs: {}",
+                                                    e
+                                                );
                                             }
                                         }
                                     }
@@ -220,7 +247,6 @@ fn main() {
             commands::scan_folder,
             commands::search_songs,
             commands::delete_song,
-
             // 播放控制
             commands::play_song,
             commands::pause_song,
@@ -229,11 +255,9 @@ fn main() {
             commands::seek_song,
             commands::set_volume,
             commands::get_player_state,
-
             // 元数据
             commands::get_metadata,
             commands::get_metadata_batch,
-
             // 隐藏歌曲管理
             commands::hide_song,
             commands::unhide_song,
@@ -243,21 +267,16 @@ fn main() {
             commands::clear_hidden_songs,
             commands::get_hidden_count,
             commands::is_song_hidden,
-
             // 设置管理
             commands::get_setting,
             commands::set_setting,
             commands::get_all_settings,
-
             // 文件操作
             commands::check_file_exists,
-
             // 喜欢歌曲查询
             commands::is_song_liked,
-
             // 隐藏歌曲完整信息
             commands::get_hidden_songs,
-
             // 日志管理
             commands::add_log,
             commands::get_logs,
@@ -265,7 +284,6 @@ fn main() {
             commands::clear_logs,
             commands::get_log_count,
             commands::get_logs_as_text,
-
             // 播放历史
             commands::add_play_history,
             commands::get_play_history,
@@ -273,16 +291,12 @@ fn main() {
             commands::get_play_counts,
             commands::get_song_play_count,
             commands::cleanup_nonexistent_songs,
-
             // 文件夹选择
             commands::select_folder,
-
             // 歌词
             commands::get_lyrics,
-
             // 缩略图
             commands::get_thumbnail_info,
-
             // 符号链接管理
             commands::get_primary_music_folder,
             commands::add_secondary_folder,

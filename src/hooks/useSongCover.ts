@@ -70,7 +70,9 @@ export function useSongCover(path: string | undefined) {
           setIsLoading(false)
         }
       })
-      return () => { cancelled = true }
+      return () => {
+        cancelled = true
+      }
     }
 
     let cancelled = false
@@ -106,7 +108,9 @@ export function useSongCover(path: string | undefined) {
 
     pendingRequests.set(path, promise)
     schedulePendingCleanup()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [path])
 
   return { cover, isLoading }
@@ -122,7 +126,7 @@ export function getCoverCacheSize() {
 
 // Vite HMR 热更新时清理模块级定时器与待处理请求，避免旧模块的 setTimeout 残留
 if ((import.meta as unknown as { hot?: { dispose: (cb: () => void) => void } }).hot) {
-  (import.meta as unknown as { hot: { dispose: (cb: () => void) => void } }).hot.dispose(() => {
+  ;(import.meta as unknown as { hot: { dispose: (cb: () => void) => void } }).hot.dispose(() => {
     if (cleanupTimer) {
       clearTimeout(cleanupTimer)
       cleanupTimer = null

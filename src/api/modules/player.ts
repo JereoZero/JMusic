@@ -36,5 +36,9 @@ export async function getMetadata(path: string): Promise<Metadata> {
 export async function getMetadataBatch(
   paths: string[]
 ): Promise<Array<{ path: string; metadata: Metadata }>> {
-  return (await invokeApi<Array<{ path: string; metadata: Metadata }>>('get_metadata_batch', { paths })) ?? []
+  return (
+    (await invokeApi<Array<{ path: string; metadata: Metadata }>>('get_metadata_batch', {
+      paths,
+    })) ?? []
+  )
 }

@@ -121,22 +121,8 @@ export const mockApi = {
     console.warn('Mock: delete song', path)
   },
 
-  getSongCover: async (_path: string): Promise<string | null> => {
-    return null
-  },
-
   getSongCoverLarge: async (_path: string): Promise<string | null> => {
     return null
-  },
-
-  getSongCoverFull: async (_path: string): Promise<string | null> => {
-    return null
-  },
-
-  getSongCoversBatch: async (paths: string[]): Promise<Map<string, string | null>> => {
-    const result = new Map<string, string | null>()
-    paths.forEach((p) => result.set(p, null))
-    return result
   },
 
   // 喜欢相关

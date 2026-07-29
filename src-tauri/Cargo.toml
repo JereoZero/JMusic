@@ -79,6 +79,6 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = "fat"
 strip = true
 codegen-units = 1

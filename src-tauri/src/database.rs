@@ -1,11 +1,14 @@
 use chrono::{DateTime, Utc};
+use rayon::prelude::*;
 use serde::Serialize;
-use sqlx::{sqlite::{SqlitePoolOptions, SqliteConnectOptions}, Pool, Sqlite};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Pool, Sqlite,
+};
 use std::str::FromStr;
 use tauri::AppHandle;
+use tracing::{debug, error, info, warn};
 use ts_rs::TS;
-use tracing::{error, info, debug, warn};
-use rayon::prelude::*;
 
 /// 歌曲数据结构
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, TS)]
@@ -52,11 +55,8 @@ impl Database {
     pub async fn init(app_handle: &AppHandle) -> Result<Self, DatabaseError> {
         // 使用应用数据目录
         let db_path = crate::paths::ensure_database_dir_exists(app_handle)
-            .map_err(|e| DatabaseError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                e
-            )))?;
-        
+            .map_err(|e| DatabaseError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, e)))?;
+
         info!("Initializing database at: {:?}", db_path);
 
         // 创建连接字符串
@@ -85,9 +85,7 @@ impl Database {
 
         // 运行迁移
         info!("Running database migrations...");
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
 
         info!("Database initialized successfully (foreign_keys + WAL enabled)");
 
@@ -122,12 +120,10 @@ impl Database {
 
     /// 获取歌曲封面
     pub async fn get_song_cover(&self, path: &str) -> Result<Option<String>, DatabaseError> {
-        let cover: Option<String> = sqlx::query_scalar(
-            "SELECT cover FROM songs WHERE path = ?"
-        )
-        .bind(path)
-        .fetch_optional(&self.pool)
-        .await?;
+        let cover: Option<String> = sqlx::query_scalar("SELECT cover FROM songs WHERE path = ?")
+            .bind(path)
+            .fetch_optional(&self.pool)
+            .await?;
 
         Ok(cover)
     }
@@ -143,7 +139,10 @@ impl Database {
         }
         // SQLite 默认参数上限 999，MAX_BATCH_SIZE=100 远低于此
         let placeholders = (0..paths.len()).map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!("SELECT path, cover FROM songs WHERE path IN ({})", placeholders);
+        let sql = format!(
+            "SELECT path, cover FROM songs WHERE path IN ({})",
+            placeholders
+        );
         let mut query = sqlx::query_as::<_, (String, Option<String>)>(&sql);
         for path in paths {
             query = query.bind(path);
@@ -154,13 +153,11 @@ impl Database {
 
     /// 更新歌曲封面
     pub async fn update_song_cover(&self, path: &str, cover: &str) -> Result<(), DatabaseError> {
-        sqlx::query(
-            "UPDATE songs SET cover = ? WHERE path = ?"
-        )
-        .bind(cover)
-        .bind(path)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE songs SET cover = ? WHERE path = ?")
+            .bind(cover)
+            .bind(path)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -246,7 +243,7 @@ impl Database {
             let mut tx = self.pool.begin().await?;
 
             let mut query_builder = sqlx::QueryBuilder::new(
-                "INSERT INTO songs (id, title, artist, album, duration, path, cover, file_mtime) "
+                "INSERT INTO songs (id, title, artist, album, duration, path, cover, file_mtime) ",
             );
             query_builder.push_values(chunk, |mut b, song| {
                 b.push_bind(&song.id)
@@ -265,7 +262,7 @@ impl Database {
                  album = excluded.album, \
                  duration = excluded.duration, \
                  cover = COALESCE(excluded.cover, songs.cover), \
-                 file_mtime = COALESCE(excluded.file_mtime, songs.file_mtime)"
+                 file_mtime = COALESCE(excluded.file_mtime, songs.file_mtime)",
             );
 
             match query_builder.build().execute(&mut *tx).await {
@@ -277,7 +274,10 @@ impl Database {
                     error!("Batch upsert failed ({} songs): {}", chunk.len(), e);
                     // 回退到逐条插入以保证部分成功
                     if let Err(rb_err) = tx.rollback().await {
-                        warn!("Failed to rollback transaction after batch upsert failure: {}", rb_err);
+                        warn!(
+                            "Failed to rollback transaction after batch upsert failure: {}",
+                            rb_err
+                        );
                     }
                     for song in chunk {
                         match sqlx::query(
@@ -313,20 +313,26 @@ impl Database {
             }
         }
 
-        info!("Inserted/Updated {} songs (total {}), {} errors", count, total, errors);
+        info!(
+            "Inserted/Updated {} songs (total {}), {} errors",
+            count, total, errors
+        );
 
         Ok((count, errors))
     }
 
     /// 获取所有歌曲的 file_mtime，用于增量扫描
-    pub async fn get_all_song_mtimes(&self) -> Result<std::collections::HashMap<String, i64>, DatabaseError> {
+    pub async fn get_all_song_mtimes(
+        &self,
+    ) -> Result<std::collections::HashMap<String, i64>, DatabaseError> {
         let rows = sqlx::query_as::<_, (String, Option<i64>)>(
-            "SELECT path, file_mtime FROM songs WHERE file_mtime IS NOT NULL"
+            "SELECT path, file_mtime FROM songs WHERE file_mtime IS NOT NULL",
         )
         .fetch_all(&self.pool)
         .await?;
 
-        let map = rows.into_iter()
+        let map = rows
+            .into_iter()
             .filter_map(|(path, mtime)| mtime.map(|m| (path, m)))
             .collect();
         Ok(map)
@@ -348,7 +354,7 @@ impl Database {
             ON CONFLICT(path) DO UPDATE SET 
                 count = count + 1,
                 last_played = CURRENT_TIMESTAMP
-            "#
+            "#,
         )
         .bind(path)
         .execute(&mut *tx)
@@ -365,14 +371,12 @@ impl Database {
         duration: i64,
         completed: bool,
     ) -> Result<(), DatabaseError> {
-        sqlx::query(
-            "INSERT INTO play_history (path, duration, completed) VALUES (?1, ?2, ?3)"
-        )
-        .bind(path)
-        .bind(duration)
-        .bind(if completed { 1 } else { 0 })
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT INTO play_history (path, duration, completed) VALUES (?1, ?2, ?3)")
+            .bind(path)
+            .bind(duration)
+            .bind(if completed { 1 } else { 0 })
+            .execute(&self.pool)
+            .await?;
 
         debug!(
             "Recorded play history: {} duration={}s completed={}",
@@ -385,7 +389,7 @@ impl Database {
     /// 获取播放次数统计
     pub async fn get_play_counts(&self) -> Result<Vec<(String, i64)>, DatabaseError> {
         let counts = sqlx::query_as::<_, (String, i64)>(
-            "SELECT path, count FROM play_counts ORDER BY count DESC"
+            "SELECT path, count FROM play_counts ORDER BY count DESC",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -395,12 +399,10 @@ impl Database {
 
     /// 获取歌曲的播放次数
     pub async fn get_song_play_count(&self, path: &str) -> Result<i64, DatabaseError> {
-        let count: Option<i64> = sqlx::query_scalar(
-            "SELECT count FROM play_counts WHERE path = ?"
-        )
-        .bind(path)
-        .fetch_optional(&self.pool)
-        .await?;
+        let count: Option<i64> = sqlx::query_scalar("SELECT count FROM play_counts WHERE path = ?")
+            .bind(path)
+            .fetch_optional(&self.pool)
+            .await?;
 
         Ok(count.unwrap_or(0))
     }
@@ -423,7 +425,7 @@ impl Database {
             JOIN songs s ON h.path = s.path
             ORDER BY h.played_at DESC
             LIMIT ?
-            "#
+            "#,
         )
         .bind(limit)
         .fetch_all(&self.pool)
@@ -516,7 +518,10 @@ impl Database {
             tx.commit().await?;
         }
 
-        info!("Cleanup complete: removed {} non-existent songs", removed_count);
+        info!(
+            "Cleanup complete: removed {} non-existent songs",
+            removed_count
+        );
         Ok(removed_count)
     }
 
@@ -541,12 +546,11 @@ impl Database {
             .replace('%', "\\%")
             .replace('_', "\\_");
         let pattern = format!("{}/%", escaped);
-        let paths: Vec<String> = sqlx::query_scalar(
-            "SELECT path FROM songs WHERE path LIKE ?1 ESCAPE '\\'"
-        )
-        .bind(&pattern)
-        .fetch_all(&self.pool)
-        .await?;
+        let paths: Vec<String> =
+            sqlx::query_scalar("SELECT path FROM songs WHERE path LIKE ?1 ESCAPE '\\'")
+                .bind(&pattern)
+                .fetch_all(&self.pool)
+                .await?;
 
         if paths.is_empty() {
             return Ok(0);
@@ -589,7 +593,10 @@ impl Database {
             tx.commit().await?;
         }
 
-        info!("Cleanup in folder {} complete: removed {} non-existent songs", folder_path, removed_count);
+        info!(
+            "Cleanup in folder {} complete: removed {} non-existent songs",
+            folder_path, removed_count
+        );
         Ok(removed_count)
     }
 
@@ -701,7 +708,7 @@ impl Database {
     /// 获取所有隐藏的歌曲路径
     pub async fn get_hidden_paths(&self) -> Result<Vec<String>, DatabaseError> {
         let paths = sqlx::query_scalar::<_, String>(
-            "SELECT path FROM hidden_songs ORDER BY hidden_at DESC"
+            "SELECT path FROM hidden_songs ORDER BY hidden_at DESC",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -710,7 +717,11 @@ impl Database {
     }
 
     /// 批量隐藏歌曲
-    pub async fn hide_songs_batch(&self, paths: Vec<String>, is_auto: bool) -> Result<usize, DatabaseError> {
+    pub async fn hide_songs_batch(
+        &self,
+        paths: Vec<String>,
+        is_auto: bool,
+    ) -> Result<usize, DatabaseError> {
         if paths.is_empty() {
             return Ok(0);
         }
@@ -824,11 +835,9 @@ impl Database {
 
     /// 获取所有设置
     pub async fn get_all_settings(&self) -> Result<Vec<(String, String)>, DatabaseError> {
-        let settings = sqlx::query_as::<_, (String, String)>(
-            "SELECT key, value FROM settings"
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let settings = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM settings")
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(settings)
     }
@@ -875,38 +884,43 @@ impl Database {
     // ==================== 日志管理 ====================
 
     /// 添加日志
-    pub async fn add_log(&self, level: &str, message: &str, target: Option<&str>) -> Result<(), DatabaseError> {
-        sqlx::query(
-            "INSERT INTO app_logs (level, message, target) VALUES (?1, ?2, ?3)"
-        )
-        .bind(level)
-        .bind(message)
-        .bind(target)
-        .execute(&self.pool)
-        .await?;
+    pub async fn add_log(
+        &self,
+        level: &str,
+        message: &str,
+        target: Option<&str>,
+    ) -> Result<(), DatabaseError> {
+        sqlx::query("INSERT INTO app_logs (level, message, target) VALUES (?1, ?2, ?3)")
+            .bind(level)
+            .bind(message)
+            .bind(target)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
 
     /// 获取日志
-    pub async fn get_logs(&self, level: Option<&str>, limit: Option<i64>) -> Result<Vec<AppLog>, DatabaseError> {
+    pub async fn get_logs(
+        &self,
+        level: Option<&str>,
+        limit: Option<i64>,
+    ) -> Result<Vec<AppLog>, DatabaseError> {
         let limit = limit.filter(|&l| l > 0).unwrap_or(100).min(1000);
 
         let logs = if let Some(level) = level {
             sqlx::query_as::<_, AppLog>(
-                "SELECT * FROM app_logs WHERE level = ?1 ORDER BY created_at DESC LIMIT ?2"
+                "SELECT * FROM app_logs WHERE level = ?1 ORDER BY created_at DESC LIMIT ?2",
             )
             .bind(level)
             .bind(limit)
             .fetch_all(&self.pool)
             .await?
         } else {
-            sqlx::query_as::<_, AppLog>(
-                "SELECT * FROM app_logs ORDER BY created_at DESC LIMIT ?1"
-            )
-            .bind(limit)
-            .fetch_all(&self.pool)
-            .await?
+            sqlx::query_as::<_, AppLog>("SELECT * FROM app_logs ORDER BY created_at DESC LIMIT ?1")
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
         };
 
         Ok(logs)
@@ -1103,12 +1117,8 @@ mod tests {
             .await
             .unwrap();
 
-        db.increment_play_count("/music/count.mp3")
-            .await
-            .unwrap();
-        db.increment_play_count("/music/count.mp3")
-            .await
-            .unwrap();
+        db.increment_play_count("/music/count.mp3").await.unwrap();
+        db.increment_play_count("/music/count.mp3").await.unwrap();
 
         let counts = db.get_play_counts().await.unwrap();
         assert_eq!(counts.len(), 1);
@@ -1137,9 +1147,7 @@ mod tests {
         db.upsert_songs(vec![make_song("/music/last.mp3", "LastSong")])
             .await
             .unwrap();
-        db.increment_play_count("/music/last.mp3")
-            .await
-            .unwrap();
+        db.increment_play_count("/music/last.mp3").await.unwrap();
 
         let last = db
             .get_last_played_song()

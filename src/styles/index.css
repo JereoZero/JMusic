@@ -5,7 +5,13 @@
 :root {
   --primary-color: #f97316;
   --logo-color: #f97316;
+  --track-bg: #4a4a4a;
 }
+
+/* 小档位下保证关键文字可读性：随 rem 缩放，但不小于安全字号 */
+.text-safe-base { font-size: max(1rem, 12px); }
+.text-safe-sm { font-size: max(0.875rem, 11px); }
+.text-safe-xs { font-size: max(0.75rem, 10px); }
 
 * {
   margin: 0;
@@ -28,6 +34,19 @@ body {
 
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* 歌曲列表项在不同缩放档位下的 padding：小档位减少垂直 padding，给文字留空间 */
+.song-item {
+  padding: 0.5rem 1.5rem; /* py-2 px-6 */
+}
+
+[data-ui-scale='xsmall'] .song-item {
+  padding: 0.25rem 1rem; /* py-1 px-4 */
+}
+
+[data-ui-scale='small'] .song-item {
+  padding: 0.375rem 1.25rem; /* py-1.5 px-5 */
 }
 
 /* 自定义滚动条 */
@@ -103,8 +122,13 @@ input[type='range']::-webkit-slider-thumb:hover {
 
 /* 播放指示器均衡器条 — 纯 CSS 动画，零 JS 开销 */
 @keyframes equalizer-bar {
-  0%, 100% { transform: scaleY(0.4); }
-  50% { transform: scaleY(1); }
+  0%,
+  100% {
+    transform: scaleY(0.4);
+  }
+  50% {
+    transform: scaleY(1);
+  }
 }
 
 .eq-bar {
@@ -116,15 +140,48 @@ input[type='range']::-webkit-slider-thumb:hover {
   will-change: transform;
 }
 
-.eq-bar-delay-1 { animation-duration: 0.5s; animation-delay: 0.1s; }
-.eq-bar-delay-2 { animation-duration: 0.7s; animation-delay: 0.2s; }
+.eq-bar-delay-1 {
+  animation-duration: 0.5s;
+  animation-delay: 0.1s;
+}
+.eq-bar-delay-2 {
+  animation-duration: 0.7s;
+  animation-delay: 0.2s;
+}
 
 /* 设置卡片入场动画 — 纯 CSS，替代 motion.section 避免每张卡片注册 RAF 订阅 */
 @keyframes card-fade-in-up {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .animate-card-in {
   animation: card-fade-in-up 0.3s ease-out;
+}
+
+/* 骨架屏微光扫过动画 */
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.08) 37%,
+    rgba(255, 255, 255, 0.04) 63%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
 }

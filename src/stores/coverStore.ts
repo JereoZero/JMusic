@@ -169,7 +169,7 @@ export function reloadCurrentCover() {
 
 // #1 修复：HMR 时取消旧订阅，避免泄漏（与 playerStore/useSongCover 的 HMR 清理一致）
 if ((import.meta as unknown as { hot?: { dispose: (cb: () => void) => void } }).hot) {
-  (import.meta as unknown as { hot: { dispose: (cb: () => void) => void } }).hot.dispose(() => {
+  ;(import.meta as unknown as { hot: { dispose: (cb: () => void) => void } }).hot.dispose(() => {
     if (unsubscribePlayer) {
       unsubscribePlayer()
       unsubscribePlayer = null

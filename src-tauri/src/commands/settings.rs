@@ -1,8 +1,10 @@
 use tauri::State;
 
+use super::common::{
+    get_music_folder_and_targets, validate_path_in_music_folder, ApiResponse, ALLOWED_SETTING_KEYS,
+};
 use crate::database::Database;
 use crate::path_validator;
-use super::common::{ApiResponse, ALLOWED_SETTING_KEYS, get_music_folder_and_targets, validate_path_in_music_folder};
 
 #[tauri::command]
 pub async fn get_setting(
@@ -11,7 +13,8 @@ pub async fn get_setting(
 ) -> Result<ApiResponse<Option<String>>, String> {
     if !ALLOWED_SETTING_KEYS.contains(&key.as_str()) {
         return Ok(ApiResponse::err(format!(
-            "Setting key '{}' is not allowed", key
+            "Setting key '{}' is not allowed",
+            key
         )));
     }
     match db.get_setting(&key).await {
@@ -28,7 +31,8 @@ pub async fn set_setting(
 ) -> Result<ApiResponse<()>, String> {
     if !ALLOWED_SETTING_KEYS.contains(&key.as_str()) {
         return Ok(ApiResponse::err(format!(
-            "Setting key '{}' is not allowed", key
+            "Setting key '{}' is not allowed",
+            key
         )));
     }
 
@@ -62,7 +66,11 @@ pub async fn check_file_exists(
     let secondary_targets_for_check = secondary_targets.clone();
     let path_for_check = path.clone();
     let is_allowed = tokio::task::spawn_blocking(move || {
-        path_validator::is_path_in_music_folder(&path_for_check, &music_folder_for_check, &secondary_targets_for_check)
+        path_validator::is_path_in_music_folder(
+            &path_for_check,
+            &music_folder_for_check,
+            &secondary_targets_for_check,
+        )
     })
     .await
     .map_err(|e| e.to_string())?;

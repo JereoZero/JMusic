@@ -127,7 +127,13 @@ function QueuePanel({ open, onClose }: QueuePanelProps) {
                 {queue.length > 0 && (
                   <button
                     onClick={async () => {
-                      if (await confirmDialog({ title: '清空播放队列？', variant: 'danger', confirmText: '清空' })) {
+                      if (
+                        await confirmDialog({
+                          title: '清空播放队列？',
+                          variant: 'danger',
+                          confirmText: '清空',
+                        })
+                      ) {
                         clearQueue()
                       }
                     }}

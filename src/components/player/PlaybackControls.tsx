@@ -11,8 +11,15 @@ interface PlaybackControlsProps {
   onTogglePlay: () => void
   onPlayPrev: () => void
   onPlayNext: () => void
-  onToggleShuffle: () => void
-  onToggleRepeat: () => void
+  // 合并档位：点击循环切换 list → loop → shuffle → list
+  onCycleMode: () => void
+}
+
+// 播放模式元数据：图标 / 文案 / 高亮
+const MODE_META: Record<PlayMode, { label: string; nextLabel: string }> = {
+  list: { label: '列表循环', nextLabel: '单曲循环' },
+  loop: { label: '单曲循环', nextLabel: '随机播放' },
+  shuffle: { label: '随机播放', nextLabel: '列表循环' },
 }
 
 function PlaybackControls({
@@ -21,12 +28,11 @@ function PlaybackControls({
   onTogglePlay,
   onPlayPrev,
   onPlayNext,
-  onToggleShuffle,
-  onToggleRepeat,
+  onCycleMode,
 }: PlaybackControlsProps) {
   const primaryColor = useThemeStore((s) => THEMES[s.currentThemeId].primary)
-  const isShuffle = playMode === 'shuffle'
-  const isLoop = playMode === 'loop'
+  const isActive = playMode !== 'list'
+  const meta = MODE_META[playMode]
 
   // M3 修复：CSS hover:scale-110 active:scale-90 替代 motion.button whileHover/whileTap
   const iconButtonClass = cn(
@@ -38,19 +44,22 @@ function PlaybackControls({
   return (
     <div className="flex items-center gap-1">
       <button
-        onClick={onToggleShuffle}
-        className={cn(iconButtonClass, isShuffle && 'text-white')}
-        style={isShuffle ? { color: primaryColor } : undefined}
-        title={isShuffle ? '关闭随机' : '随机播放'}
-        aria-label={isShuffle ? '关闭随机' : '随机播放'}
+        onClick={onCycleMode}
+        className={cn(iconButtonClass, isActive && 'text-white')}
+        style={isActive ? { color: primaryColor } : undefined}
+        title={`${meta.label}（点击切换为${meta.nextLabel}）`}
+        aria-label={`${meta.label}，点击切换为${meta.nextLabel}`}
       >
-        <Shuffle size={18} />
+        {playMode === 'shuffle' ? (
+          <Shuffle size={18} />
+        ) : (
+          <div className="relative flex items-center justify-center">
+            <Repeat size={18} />
+            {playMode === 'loop' && <span className="absolute text-[7px] font-bold">1</span>}
+          </div>
+        )}
       </button>
-      <button
-        onClick={onPlayPrev}
-        className={iconButtonClass}
-        aria-label="上一首"
-      >
+      <button onClick={onPlayPrev} className={iconButtonClass} aria-label="上一首">
         <SkipBack size={20} />
       </button>
       <button
@@ -71,24 +80,8 @@ function PlaybackControls({
           )}
         </span>
       </button>
-      <button
-        onClick={onPlayNext}
-        className={iconButtonClass}
-        aria-label="下一首"
-      >
+      <button onClick={onPlayNext} className={iconButtonClass} aria-label="下一首">
         <SkipForward size={20} />
-      </button>
-      <button
-        onClick={onToggleRepeat}
-        className={cn(iconButtonClass, isLoop && 'text-white')}
-        style={isLoop ? { color: primaryColor } : undefined}
-        title={isLoop ? '关闭单曲循环' : '单曲循环'}
-        aria-label={isLoop ? '关闭单曲循环' : '单曲循环'}
-      >
-        <div className="relative flex items-center justify-center">
-          <Repeat size={18} />
-          {isLoop && <span className="absolute text-[7px] font-bold">1</span>}
-        </div>
       </button>
     </div>
   )

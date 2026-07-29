@@ -1,9 +1,9 @@
 use tauri::State;
 
-use crate::database::Database;
+use super::common::{validate_path_in_music_folder, ApiResponse};
 use crate::database::AppLog;
+use crate::database::Database;
 use crate::database::PlayHistory;
-use super::common::{ApiResponse, validate_path_in_music_folder};
 
 /// 合法日志级别白名单
 fn is_valid_level(level: &str) -> bool {
@@ -40,9 +40,7 @@ pub async fn get_logs(
 }
 
 #[tauri::command]
-pub async fn get_error_logs(
-    db: State<'_, Database>,
-) -> Result<ApiResponse<Vec<AppLog>>, String> {
+pub async fn get_error_logs(db: State<'_, Database>) -> Result<ApiResponse<Vec<AppLog>>, String> {
     match db.get_error_logs().await {
         Ok(logs) => Ok(ApiResponse::ok(logs)),
         Err(e) => Ok(ApiResponse::err(e)),
@@ -66,11 +64,9 @@ pub async fn get_log_count(db: State<'_, Database>) -> Result<ApiResponse<i64>, 
 }
 
 #[tauri::command]
-pub async fn get_logs_as_text(
-    db: State<'_, Database>,
-) -> Result<ApiResponse<String>, String> {
+pub async fn get_logs_as_text(db: State<'_, Database>) -> Result<ApiResponse<String>, String> {
     use std::fmt::Write;
-    
+
     let logs = match db.get_logs(None, Some(100)).await {
         Ok(logs) => logs,
         Err(e) => return Ok(ApiResponse::err(e.to_string())),
@@ -129,9 +125,7 @@ pub async fn get_play_history(
 }
 
 #[tauri::command]
-pub async fn clear_play_history(
-    db: State<'_, Database>,
-) -> Result<ApiResponse<()>, String> {
+pub async fn clear_play_history(db: State<'_, Database>) -> Result<ApiResponse<()>, String> {
     match db.clear_play_history().await {
         Ok(_) => Ok(ApiResponse::ok(())),
         Err(e) => Ok(ApiResponse::err(e)),

@@ -1,14 +1,14 @@
 mod common;
-mod song;
-mod player;
 mod library;
-mod settings;
 mod logs;
 mod misc;
+mod player;
+mod settings;
+mod song;
 
-pub use song::*;
-pub use player::*;
 pub use library::*;
-pub use settings::*;
 pub use logs::*;
 pub use misc::*;
+pub use player::*;
+pub use settings::*;
+pub use song::*;

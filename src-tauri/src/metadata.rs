@@ -1,9 +1,9 @@
+use base64::{engine::general_purpose, Engine as _};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::Accessor;
 use serde::Serialize;
 use std::path::Path;
-use base64::{Engine as _, engine::general_purpose};
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, TS)]

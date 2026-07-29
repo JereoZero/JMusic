@@ -1,11 +1,14 @@
-use tauri::State;
-use std::collections::HashMap;
 use base64::Engine;
+use std::collections::HashMap;
+use tauri::State;
 
+use super::common::{
+    get_music_folder_and_targets, get_or_create_thumbnail, validate_path_in_music_folder,
+    ApiResponse, ThumbnailInfo, MAX_BATCH_SIZE,
+};
 use crate::database::Database;
 use crate::database::Song;
 use crate::scanner::FolderScanner;
-use super::common::{ApiResponse, ThumbnailInfo, get_or_create_thumbnail, validate_path_in_music_folder, MAX_BATCH_SIZE};
 
 #[tauri::command]
 pub async fn get_songs(db: State<'_, Database>) -> Result<ApiResponse<Vec<Song>>, String> {
@@ -17,7 +20,9 @@ pub async fn get_songs(db: State<'_, Database>) -> Result<ApiResponse<Vec<Song>>
 
 /// 获取最后播放的歌曲（restoreLastSong 后端兜底）
 #[tauri::command]
-pub async fn get_last_played_song(db: State<'_, Database>) -> Result<ApiResponse<Option<Song>>, String> {
+pub async fn get_last_played_song(
+    db: State<'_, Database>,
+) -> Result<ApiResponse<Option<Song>>, String> {
     match db.get_last_played_song().await {
         Ok(song) => Ok(ApiResponse::ok(song)),
         Err(e) => Ok(ApiResponse::err(e)),
@@ -52,10 +57,69 @@ pub async fn get_song_cover_large(
         return Ok(ApiResponse::err(e));
     }
 
+    // 先尝试缩略图缓存 + DB 封面
     match get_or_create_thumbnail(&db, &path, THUMBNAIL_LARGE_SIZE).await {
-        Ok(thumbnail) => Ok(ApiResponse::ok(thumbnail)),
-        Err(e) => Ok(ApiResponse::err(e)),
+        Ok(Some(thumbnail)) => return Ok(ApiResponse::ok(Some(thumbnail))),
+        Ok(None) => {} // DB 无封面，进入 fallback
+        Err(e) => return Ok(ApiResponse::err(e)),
     }
+
+    // H1 修复：fallback 从音频文件提取或查找同目录封面，再生成缩略图
+    // 避免 C1 优化（改用缩略图 API）导致 fallback cover 功能丢失
+    let (music_folder, secondary_targets) = match get_music_folder_and_targets(&db).await {
+        Ok(v) => v,
+        Err(e) => return Ok(ApiResponse::err(e)),
+    };
+    if let Some(cover_base64) =
+        extract_cover_with_fallback(&db, &path, &music_folder, &secondary_targets).await
+    {
+        let path_owned = path.to_string();
+        let thumbnail = tokio::task::spawn_blocking(move || {
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            match STANDARD.decode(&cover_base64) {
+                Ok(decoded) => match crate::thumbnail::create_thumbnail(
+                    &decoded,
+                    &path_owned,
+                    THUMBNAIL_LARGE_SIZE,
+                ) {
+                    Ok(thumb) => Some(thumb),
+                    Err(_) => Some(cover_base64), // 缩略图生成失败则返回原始封面
+                },
+                Err(_) => Some(cover_base64),
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        return Ok(ApiResponse::ok(thumbnail));
+    }
+
+    Ok(ApiResponse::ok(None))
+}
+
+/// Fallback 封面获取：从音频文件提取或查找同目录封面文件。
+/// 调用前提：DB 中已确认无封面（由 get_or_create_thumbnail 或 get_song_cover 确认）。
+async fn extract_cover_with_fallback(
+    db: &Database,
+    path: &str,
+    music_folder: &str,
+    secondary_targets: &[std::path::PathBuf],
+) -> Option<String> {
+    // 1. 从音频文件提取嵌入封面
+    let extractor = crate::metadata::MetadataExtractor::new();
+    match extractor.extract(path).await {
+        Ok(metadata) => {
+            if let Some(cover) = metadata.cover {
+                if let Err(e) = db.update_song_cover(path, &cover).await {
+                    tracing::warn!("Failed to update song cover: {}", e);
+                }
+                return Some(cover);
+            }
+        }
+        Err(e) => tracing::error!("Failed to extract cover: {}", e),
+    }
+
+    // 2. 查找同目录封面文件 (cover.jpg/folder.jpg/artist.jpg 等)
+    find_fallback_cover(path, music_folder, secondary_targets).await
 }
 
 #[tauri::command]
@@ -67,39 +131,27 @@ pub async fn get_song_cover_full(
         return Ok(ApiResponse::err(e));
     }
 
-    let (music_folder, secondary_targets) = super::common::get_music_folder_and_targets(&db).await?;
+    let (music_folder, secondary_targets) = get_music_folder_and_targets(&db).await?;
 
+    // 1. DB 查封面
     match db.get_song_cover(&path).await {
-        Ok(Some(cover)) if !cover.is_empty() => {
-            Ok(ApiResponse::ok(Some(cover)))
-        }
+        Ok(Some(cover)) if !cover.is_empty() => Ok(ApiResponse::ok(Some(cover))),
         Ok(_) => {
-            let extractor = crate::metadata::MetadataExtractor::new();
-            match extractor.extract(&path).await {
-                Ok(metadata) => {
-                    if let Some(cover) = metadata.cover {
-                        if let Err(e) = db.update_song_cover(&path, &cover).await {
-                            tracing::warn!("Failed to update song cover: {}", e);
-                        }
-                        return Ok(ApiResponse::ok(Some(cover)));
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to extract cover: {}", e);
-                }
+            // 2. Fallback: 从音频提取 + 同目录查找
+            match extract_cover_with_fallback(&db, &path, &music_folder, &secondary_targets).await {
+                Some(cover) => Ok(ApiResponse::ok(Some(cover))),
+                None => Ok(ApiResponse::ok(None)),
             }
-
-            if let Some(fallback_cover) = find_fallback_cover(&path, &music_folder, &secondary_targets).await {
-                return Ok(ApiResponse::ok(Some(fallback_cover)));
-            }
-
-            Ok(ApiResponse::ok(None))
         }
         Err(e) => Ok(ApiResponse::err(e)),
     }
 }
 
-async fn find_fallback_cover(song_path: &str, music_folder: &str, secondary_targets: &[std::path::PathBuf]) -> Option<String> {
+async fn find_fallback_cover(
+    song_path: &str,
+    music_folder: &str,
+    secondary_targets: &[std::path::PathBuf],
+) -> Option<String> {
     // 整体放入 spawn_blocking：原实现混用同步 exists() + async fs::read().await，
     // exists() 在 async 线程上阻塞；统一改为同步 fs 并移入 blocking 线程池
     let song_path = song_path.to_string();
@@ -123,16 +175,11 @@ fn find_fallback_cover_blocking(
     use std::path::Path;
 
     const ALBUM_COVER_NAMES: &[&str] = &[
-        "cover", "Cover", "COVER",
-        "album", "Album", "ALBUM",
-        "folder", "Folder", "FOLDER",
-        "front", "Front", "FRONT",
-        "artwork", "Artwork", "ARTWORK",
+        "cover", "Cover", "COVER", "album", "Album", "ALBUM", "folder", "Folder", "FOLDER",
+        "front", "Front", "FRONT", "artwork", "Artwork", "ARTWORK",
     ];
     const ARTIST_COVER_NAMES: &[&str] = &[
-        "artist", "Artist", "ARTIST",
-        "band", "Band", "BAND",
-        "singer", "Singer", "SINGER",
+        "artist", "Artist", "ARTIST", "band", "Band", "BAND", "singer", "Singer", "SINGER",
     ];
     const EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp"];
 
@@ -151,7 +198,11 @@ fn find_fallback_cover_blocking(
     let song = Path::new(song_path);
     let song_dir = song.parent()?;
 
-    if !crate::path_validator::is_path_in_music_folder(song_dir.to_str()?, music_folder, secondary_targets) {
+    if !crate::path_validator::is_path_in_music_folder(
+        song_dir.to_str()?,
+        music_folder,
+        secondary_targets,
+    ) {
         return None;
     }
 
@@ -161,7 +212,11 @@ fn find_fallback_cover_blocking(
 
     if let Some(artist_dir) = song_dir.parent() {
         // 安全检查：artist_dir 必须仍在 music_folder 内，防止越权读取父目录
-        if !crate::path_validator::is_path_in_music_folder(artist_dir.to_str()?, music_folder, secondary_targets) {
+        if !crate::path_validator::is_path_in_music_folder(
+            artist_dir.to_str()?,
+            music_folder,
+            secondary_targets,
+        ) {
             return None;
         }
         if let Some(cover) = find_cover_in_dir(artist_dir, ALBUM_COVER_NAMES) {
@@ -185,12 +240,14 @@ pub async fn get_song_covers_batch(
 
     if paths.len() > MAX_BATCH_SIZE {
         return Ok(ApiResponse::err(format!(
-            "Too many paths (max {})", MAX_BATCH_SIZE
+            "Too many paths (max {})",
+            MAX_BATCH_SIZE
         )));
     }
 
     let db_ref = db.inner().clone();
-    let (music_folder, secondary_targets) = super::common::get_music_folder_and_targets(&db).await?;
+    let (music_folder, secondary_targets) =
+        super::common::get_music_folder_and_targets(&db).await?;
 
     // Step 1: 批量校验路径 + 检查缩略图缓存（单次 spawn_blocking）
     let music_folder_clone = music_folder.clone();
@@ -207,7 +264,9 @@ pub async fn get_song_covers_batch(
             ) {
                 valid.push(path.clone());
                 if crate::thumbnail::thumbnail_exists(path, THUMBNAIL_SMALL_SIZE) {
-                    if let Some(b64) = crate::thumbnail::get_thumbnail_base64(path, THUMBNAIL_SMALL_SIZE) {
+                    if let Some(b64) =
+                        crate::thumbnail::get_thumbnail_base64(path, THUMBNAIL_SMALL_SIZE)
+                    {
                         cached.insert(path.clone(), b64);
                     }
                 }
@@ -228,7 +287,10 @@ pub async fn get_song_covers_batch(
     let db_covers = if uncached.is_empty() {
         HashMap::new()
     } else {
-        db_ref.get_song_covers_batch(&uncached).await.map_err(|e| e.to_string())?
+        db_ref
+            .get_song_covers_batch(&uncached)
+            .await
+            .map_err(|e| e.to_string())?
     };
 
     // Step 3: 对 DB 有封面的路径，rayon 并行创建缩略图（CPU 密集：解码+Lanczos3+编码+写盘）
@@ -247,7 +309,11 @@ pub async fn get_song_covers_batch(
                 .map(|(path, cover)| {
                     let thumbnail = match STANDARD.decode(&cover) {
                         Ok(decoded) => {
-                            match crate::thumbnail::create_thumbnail(&decoded, &path, THUMBNAIL_SMALL_SIZE) {
+                            match crate::thumbnail::create_thumbnail(
+                                &decoded,
+                                &path,
+                                THUMBNAIL_SMALL_SIZE,
+                            ) {
                                 Ok(t) => t,
                                 Err(_) => cover,
                             }
@@ -378,13 +444,19 @@ pub async fn scan_folder(
     let scanner = FolderScanner::new();
     // 获取已存储的 file_mtime 用于增量扫描（跳过未变文件）
     let existing_mtimes = db.get_all_song_mtimes().await.unwrap_or_else(|e| {
-        tracing::warn!("Failed to load existing mtimes, falling back to full scan: {}", e);
+        tracing::warn!(
+            "Failed to load existing mtimes, falling back to full scan: {}",
+            e
+        );
         Default::default()
     });
     match scanner.scan(&path, &existing_mtimes, app_handle).await {
         Ok(mut result) => {
             if !result.normal_songs.is_empty() {
-                match db.upsert_songs(std::mem::take(&mut result.normal_songs)).await {
+                match db
+                    .upsert_songs(std::mem::take(&mut result.normal_songs))
+                    .await
+                {
                     Ok((success, errors)) => {
                         if errors > 0 {
                             tracing::warn!("{} normal songs failed to insert", errors);
@@ -404,7 +476,10 @@ pub async fn scan_folder(
                     .iter()
                     .map(|s| s.path.clone())
                     .collect();
-                match db.upsert_songs(std::mem::take(&mut result.encrypted_songs)).await {
+                match db
+                    .upsert_songs(std::mem::take(&mut result.encrypted_songs))
+                    .await
+                {
                     Ok((success, errors)) => {
                         if success > 0 {
                             if let Err(e) = db.hide_songs_batch(encrypted_paths, true).await {
@@ -439,10 +514,7 @@ pub async fn search_songs(
 }
 
 #[tauri::command]
-pub async fn delete_song(
-    db: State<'_, Database>,
-    path: String,
-) -> Result<ApiResponse<()>, String> {
+pub async fn delete_song(db: State<'_, Database>, path: String) -> Result<ApiResponse<()>, String> {
     if let Err(e) = validate_path_in_music_folder(&db, &path).await {
         return Ok(ApiResponse::err(e));
     }

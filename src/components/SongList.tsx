@@ -11,10 +11,53 @@ import SongItem from './SongItem'
 import { usePlayQueueStore } from '../stores/playQueueStore'
 import { useThemeStore } from '../stores/themeStore'
 import { THEMES } from '../config/themes'
+import { useUiStore, UI_SCALE_CONFIG } from '../stores/uiStore'
+
+// 批量操作工具栏按钮统一样式：hover 反馈 + 按下触感
+const BATCH_BTN_CLASS =
+  'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-zinc-300 hover:bg-white/5 hover:text-white active:scale-95 transition-all duration-150'
+
+const SKELETON_ROWS = 12
+
+// 加载骨架屏：首屏 IPC 拉取歌曲期间避免闪现“暂无歌曲”
+function SongListSkeleton({ showHeader }: { showHeader?: boolean }) {
+  return (
+    <div className="h-full flex flex-col overflow-hidden">
+      {showHeader && <div className="h-11 border-b border-white/5 flex-shrink-0" />}
+      <div className="flex-1 overflow-y-auto">
+        {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 px-6"
+            style={{ height: APP_CONFIG.ui.songItemHeight }}
+          >
+            <div className="skeleton w-4 h-3 rounded flex-shrink-0" />
+            <div className="skeleton w-10 h-10 rounded-lg flex-shrink-0" />
+            <div className="flex-1 min-w-0 space-y-2">
+              <div className="skeleton h-3 w-2/5 rounded" />
+              <div className="skeleton h-3 w-1/4 rounded" />
+            </div>
+            <div className="skeleton w-8 h-3 rounded flex-shrink-0" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 function ClockIcon({ size }: { size: number }) {
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <circle cx="12" cy="12" r="10"></circle>
       <polyline points="12 6 12 12 16 14"></polyline>
     </svg>
@@ -33,6 +76,7 @@ interface SongListProps {
   onBatchHide?: (paths: string[], hidden: boolean) => void
   showLikeButton?: boolean
   showHiddenButton?: boolean
+  isLoading?: boolean
   emptyIcon?: React.ReactNode
   emptyTitle?: string
   emptyDescription?: string
@@ -90,6 +134,7 @@ export default function SongList({
   onBatchHide,
   showLikeButton = true,
   showHiddenButton = true,
+  isLoading = false,
   emptyIcon,
   emptyTitle = '暂无歌曲',
   emptyDescription = '',
@@ -106,6 +151,10 @@ export default function SongList({
   const primaryColor = useThemeStore((s) => THEMES[s.currentThemeId].primary)
   const addToQueue = usePlayQueueStore((s) => s.addBatchToQueue)
 
+  // 界面缩放：行高跟随 factor，保证虚拟列表 px 坐标系与缩放后内容一致
+  const uiScale = useUiStore((s) => s.scale)
+  const songItemHeight = Math.round(APP_CONFIG.ui.songItemHeight * UI_SCALE_CONFIG[uiScale].factor)
+
   const columnConfig = useMemo<SongListColumnConfig>(
     () => ({ showLike: showLikeButton, showHide: showHiddenButton }),
     [showLikeButton, showHiddenButton]
@@ -114,9 +163,14 @@ export default function SongList({
   const virtualizer = useVirtualizer({
     count: songs.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => APP_CONFIG.ui.songItemHeight,
+    estimateSize: () => songItemHeight,
     overscan: APP_CONFIG.ui.virtualizerOverscan,
   })
+
+  // 缩放档位变化时强制重新测量，避免虚拟列表沿用旧行高导致重叠/错位
+  useEffect(() => {
+    virtualizer.measure()
+  }, [uiScale, virtualizer])
 
   const items = virtualizer.getVirtualItems()
 
@@ -236,8 +290,11 @@ export default function SongList({
   }, [selectedSongs, addToQueue, clearSelection])
 
   if (songs.length === 0) {
+    if (isLoading) {
+      return <SongListSkeleton showHeader={showHeader} />
+    }
     return (
-      <div className="h-full flex flex-col items-center justify-center text-zinc-600">
+      <div className="h-full flex flex-col items-center justify-center text-zinc-600 animate-card-in">
         {emptyIcon}
         <p className="text-lg mb-2 text-zinc-500">{emptyTitle}</p>
         {emptyDescription && <p className="text-sm text-zinc-600">{emptyDescription}</p>}
@@ -303,7 +360,7 @@ export default function SongList({
             {onBatchLike && showLikeButton && (
               <button
                 onClick={() => handleBatchLike(true)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-zinc-300 hover:bg-white/5 hover:text-white transition-colors"
+                className={BATCH_BTN_CLASS}
                 title="批量添加到喜欢"
               >
                 <Heart size={14} />
@@ -313,7 +370,7 @@ export default function SongList({
             {onBatchLike && showLikeButton && (
               <button
                 onClick={() => handleBatchLike(false)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-zinc-300 hover:bg-white/5 hover:text-white transition-colors"
+                className={BATCH_BTN_CLASS}
                 title="批量取消喜欢"
               >
                 <Heart size={14} className="opacity-50" />
@@ -323,7 +380,7 @@ export default function SongList({
             {onBatchHide && showHiddenButton && (
               <button
                 onClick={() => handleBatchHide(true)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-zinc-300 hover:bg-white/5 hover:text-white transition-colors"
+                className={BATCH_BTN_CLASS}
                 title="批量隐藏"
               >
                 <Eye size={14} className="opacity-50" />
@@ -333,7 +390,7 @@ export default function SongList({
             {onBatchHide && showHiddenButton && (
               <button
                 onClick={() => handleBatchHide(false)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-zinc-300 hover:bg-white/5 hover:text-white transition-colors"
+                className={BATCH_BTN_CLASS}
                 title="批量取消隐藏"
               >
                 <Eye size={14} />
@@ -384,7 +441,7 @@ export default function SongList({
                   top: 0,
                   left: 0,
                   width: '100%',
-                  height: APP_CONFIG.ui.songItemHeight,
+                  height: songItemHeight,
                   transform: `translateY(${virtualRow.start}px)`,
                   willChange: 'transform',
                 }}

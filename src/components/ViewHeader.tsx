@@ -34,15 +34,15 @@ function ViewHeader({
     },
     [primaryColor]
   )
-  const handleSearchBlur = useCallback(
-    (e: React.FocusEvent<HTMLInputElement>) => {
-      e.currentTarget.style.borderColor = 'transparent'
-    },
-    []
-  )
+  const handleSearchBlur = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    e.currentTarget.style.borderColor = 'transparent'
+  }, [])
 
   return (
-    <div className="px-6 py-4 flex items-center justify-between border-b border-white/5" data-drag-region>
+    <div
+      className="px-6 py-4 flex items-center justify-between border-b border-white/5"
+      data-drag-region
+    >
       <div className="flex items-end gap-4">
         <h2 className="text-2xl font-bold text-white tracking-tight">{title}</h2>
         {count !== undefined && (

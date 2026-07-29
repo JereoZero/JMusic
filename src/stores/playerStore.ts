@@ -469,14 +469,19 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       // 前端无记录，尝试后端兜底（play_counts.last_played）
       try {
         const lastSong = await api.getLastPlayedSong()
-        if (!isStillInitial()) return  // 用户已开始播放，放弃恢复
+        if (!isStillInitial()) return // 用户已开始播放，放弃恢复
         if (lastSong) {
           const songs = await api.getSongs()
-          if (!isStillInitial()) return  // 用户已开始播放，放弃恢复
+          if (!isStillInitial()) return // 用户已开始播放，放弃恢复
           const songIndex = songs.findIndex((s) => s.path === lastSong.path)
           if (songIndex >= 0) {
             queueStore.setQueue(songs, songIndex, 'local')
-            set({ currentSong: songs[songIndex], currentTime: 0, duration: songs[songIndex].duration, isPlaying: false })
+            set({
+              currentSong: songs[songIndex],
+              currentTime: 0,
+              duration: songs[songIndex].duration,
+              isPlaying: false,
+            })
             get().updateMediaSession(songs[songIndex])
             log('后端兜底恢复歌曲', songs[songIndex].title)
           }
@@ -499,10 +504,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
         songs = likedSongs
         source = 'liked'
       } else if (queueSource === 'hidden') {
-        const [allSongs, hiddenPaths] = await Promise.all([
-          api.getSongs(),
-          api.getHiddenPaths(),
-        ])
+        const [allSongs, hiddenPaths] = await Promise.all([api.getSongs(), api.getHiddenPaths()])
         const hiddenSet = new Set(hiddenPaths)
         songs = allSongs.filter((s) => hiddenSet.has(s.path))
         source = 'hidden'
@@ -511,7 +513,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
         source = 'local'
       }
 
-      if (!isStillInitial()) return  // 用户已开始播放，放弃恢复
+      if (!isStillInitial()) return // 用户已开始播放，放弃恢复
 
       const songIndex = songs.findIndex((s) => s.path === lastSongPath)
       if (songIndex >= 0) {
@@ -550,10 +552,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
 
     if (songs.length === 0 && queueSource === 'hidden') {
       try {
-        const [allSongs, hiddenPaths] = await Promise.all([
-          api.getSongs(),
-          api.getHiddenPaths(),
-        ])
+        const [allSongs, hiddenPaths] = await Promise.all([api.getSongs(), api.getHiddenPaths()])
         const hiddenSet = new Set(hiddenPaths)
         songs = allSongs.filter((s) => hiddenSet.has(s.path))
         if (songs.length > 0) source = 'hidden'
@@ -624,6 +623,10 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       // 立即标记为非播放状态：后端已重置 state，前端需同步，
       // 避免 playNext 失败/队列空时 UI 残留"播放中"
       set({ isPlaying: false })
+      // 重置 backendLoaded：后端 track 已结束（state=Stopped），
+      // 若不重置，playNext 失败后用户点 togglePlay 会走 resume 分支，
+      // 后端 resume() 在 Stopped 态静默返回 Ok 但不播放，导致 UI 显示"播放中"但无声音
+      backendLoaded = false
       await finalizePlayHistory(true)
       // 仅当当前歌曲未在 finalize 期间被用户主动切换时才自动推进
       const curPath = usePlayerStore.getState().currentSong?.path
@@ -694,7 +697,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
 
 // Vite HMR 热更新时重置模块级状态，避免旧状态泄漏
 if ((import.meta as unknown as { hot?: { dispose: (cb: () => void) => void } }).hot) {
-  (import.meta as unknown as { hot: { dispose: (cb: () => void) => void } }).hot.dispose(() => {
+  ;(import.meta as unknown as { hot: { dispose: (cb: () => void) => void } }).hot.dispose(() => {
     resetModuleState()
   })
 }

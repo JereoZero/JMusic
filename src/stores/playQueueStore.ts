@@ -64,13 +64,17 @@ interface PlayQueueStore extends PlayQueueState {
 
   shuffleQueue: () => void
   unshuffleQueue: () => void
-  toggleShuffle: () => void
+  // 合并档位：list → loop → shuffle → list 循环切换
+  cyclePlayMode: () => PlayMode
 
   setLastSongPath: (path: string | null) => void
   setCurrentIndex: (index: number) => void
 }
 
-function shuffleTracksKeepCurrent<T extends { path: string }>(tracks: T[], currentIndex: number): T[] {
+function shuffleTracksKeepCurrent<T extends { path: string }>(
+  tracks: T[],
+  currentIndex: number
+): T[] {
   if (tracks.length === 0) return tracks
   // 边界保护：currentIndex 越界时直接打乱全部
   if (currentIndex < 0 || currentIndex >= tracks.length) {
@@ -235,9 +239,12 @@ export const usePlayQueueStore = create<PlayQueueStore>()(
               : -1
             // fromIndex < toIndex 时，目标歌曲在 newOriginalQueue 中已左移，
             // 移动歌曲应插入到目标歌曲之后（origToIndex + 1）以保持与 queue 一致的相对顺序
-            const insertPos = origToIndex >= 0
-              ? (fromIndex < toIndex ? origToIndex + 1 : origToIndex)
-              : newOriginalQueue.length
+            const insertPos =
+              origToIndex >= 0
+                ? fromIndex < toIndex
+                  ? origToIndex + 1
+                  : origToIndex
+                : newOriginalQueue.length
             newOriginalQueue.splice(insertPos, 0, origRemoved)
           }
 
@@ -352,17 +359,20 @@ export const usePlayQueueStore = create<PlayQueueStore>()(
         })
       },
 
-      toggleShuffle: () => {
+      cyclePlayMode: () => {
         const { settings } = usePlayerSettingsStore.getState()
-        const isShuffled = settings.playMode === 'shuffle'
+        const mode = settings.playMode
+        // list → loop → shuffle → list
+        const nextMode: PlayMode = mode === 'list' ? 'loop' : mode === 'loop' ? 'shuffle' : 'list'
 
-        if (isShuffled) {
-          get().unshuffleQueue()
-          usePlayerSettingsStore.getState().setPlayMode('list')
-        } else {
+        if (nextMode === 'shuffle') {
           get().shuffleQueue()
-          usePlayerSettingsStore.getState().setPlayMode('shuffle')
+        } else if (mode === 'shuffle') {
+          // 离开随机：恢复原始队列顺序
+          get().unshuffleQueue()
         }
+        usePlayerSettingsStore.getState().setPlayMode(nextMode)
+        return nextMode
       },
 
       setLastSongPath: (path) => {

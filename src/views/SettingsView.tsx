@@ -16,6 +16,7 @@ import {
   ExternalLink,
   Download,
   Sparkles,
+  Scaling,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import * as api from '../api/modules'
@@ -23,6 +24,7 @@ import { useLibraryStore } from '../stores/libraryStore'
 import { confirmDialog } from '../stores/dialogStore'
 import { useOperationLogStore, type OperationLog } from '../stores/operationLogStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useUiStore, UI_SCALE_CONFIG, UI_SCALE_ORDER, type UiScale } from '../stores/uiStore'
 import { THEMES, ThemeId } from '../config/themes'
 import { useUpdateCheck, useScanProgress } from '../hooks'
 import type { AppLog } from '../api/modules/types'
@@ -211,21 +213,29 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const fetchLikedPaths = useLibraryStore((s) => s.fetchLikedPaths)
   const fetchHiddenPaths = useLibraryStore((s) => s.fetchHiddenPaths)
   // 仅在 debug tab 时订阅操作日志，避免每次 log() 触发 SettingsView 重渲染
-  const operationLogs = useOperationLogStore((s) =>
-    activeTab === 'debug' ? s.logs : EMPTY_LOGS
-  )
+  const operationLogs = useOperationLogStore((s) => (activeTab === 'debug' ? s.logs : EMPTY_LOGS))
   const clearOperationLogs = useOperationLogStore((s) => s.clear)
   const currentThemeId = useThemeStore((s) => s.currentThemeId)
   const setTheme = useThemeStore((s) => s.setTheme)
   const primaryColor = useThemeStore((s) => THEMES[s.currentThemeId].primary)
-  const { updateInfo, isChecking, error: updateError, checkUpdate, clearUpdateInfo } = useUpdateCheck()
+  const uiScale = useUiStore((s) => s.scale)
+  const setUiScale = useUiStore((s) => s.setScale)
+  const {
+    updateInfo,
+    isChecking,
+    error: updateError,
+    checkUpdate,
+    clearUpdateInfo,
+  } = useUpdateCheck()
   const { progressText, percent, reset: resetScanProgress } = useScanProgress()
 
   // unmount 守卫：async handler 在 await 完成后若组件已卸载，跳过 setState/reset
   // React 18+ 虽不再打印 warning，但显式守卫可避免无意义的渲染与 store 操作
   const mountedRef = useRef(true)
   useEffect(() => {
-    return () => { mountedRef.current = false }
+    return () => {
+      mountedRef.current = false
+    }
   }, [])
 
   // 统一的 async handler 收尾：unmount 后无操作
@@ -255,28 +265,35 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
       }
     }
     loadSettings()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // 统一的日志加载函数：刷新按钮和 useEffect 共用
   // signal 用于在 useEffect cleanup 时丢弃过期响应
-  const loadLogs = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const level = logFilter === 'all' ? undefined : logFilter.toUpperCase()
-      const data = await api.getLogs(level, APP_CONFIG.ui.logFetchLimit)
-      if (signal?.aborted) return
-      setLogs(data)
-    } catch (error) {
-      if (signal?.aborted) return
-      handleError(error, '加载日志')
-    }
-  }, [logFilter])
+  const loadLogs = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const level = logFilter === 'all' ? undefined : logFilter.toUpperCase()
+        const data = await api.getLogs(level, APP_CONFIG.ui.logFetchLimit)
+        if (signal?.aborted) return
+        setLogs(data)
+      } catch (error) {
+        if (signal?.aborted) return
+        handleError(error, '加载日志')
+      }
+    },
+    [logFilter]
+  )
 
   useEffect(() => {
     if (activeTab !== 'logs') return
     const controller = new AbortController()
     void loadLogs(controller.signal)
-    return () => { controller.abort() }
+    return () => {
+      controller.abort()
+    }
   }, [activeTab, loadLogs])
 
   const handleCopyLogs = async () => {
@@ -291,7 +308,8 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   }
 
   const handleClearLogs = async () => {
-    if (!(await confirmDialog({ title: '清空所有日志？', variant: 'danger', confirmText: '清空' }))) return
+    if (!(await confirmDialog({ title: '清空所有日志？', variant: 'danger', confirmText: '清空' })))
+      return
     setLoading(true)
     try {
       const count = await api.clearLogs()
@@ -324,7 +342,8 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   }
 
   const handleClearPlayHistory = async () => {
-    if (!(await confirmDialog({ title: '清空播放历史？', variant: 'danger', confirmText: '清空' }))) return
+    if (!(await confirmDialog({ title: '清空播放历史？', variant: 'danger', confirmText: '清空' })))
+      return
     setLoading(true)
     try {
       await api.clearPlayHistory()
@@ -338,7 +357,10 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   }
 
   /** 格式化扫描结果消息：显示新增/更新数 + 跳过未变数 */
-  const formatScanMessage = (prefix: string, result: { normal_songs: unknown[]; encrypted_songs: unknown[]; skipped?: number }) => {
+  const formatScanMessage = (
+    prefix: string,
+    result: { normal_songs: unknown[]; encrypted_songs: unknown[]; skipped?: number }
+  ) => {
     const total = result.normal_songs.length + result.encrypted_songs.length
     const skipped = result.skipped || 0
     if (skipped > 0) {
@@ -348,12 +370,15 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   }
 
   const handleClearAllData = async () => {
-    if (!(await confirmDialog({
-      title: '清除全部历史数据？',
-      description: '这将清空播放历史、喜欢列表、隐藏列表、操作日志。\n此操作不可恢复！',
-      variant: 'danger',
-      confirmText: '清除全部',
-    }))) return
+    if (
+      !(await confirmDialog({
+        title: '清除全部历史数据？',
+        description: '这将清空播放历史、喜欢列表、隐藏列表、操作日志。\n此操作不可恢复！',
+        variant: 'danger',
+        confirmText: '清除全部',
+      }))
+    )
+      return
     setLoading(true)
     try {
       await api.clearPlayHistory()
@@ -375,7 +400,8 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   }
 
   const handleClearHiddenSongs = async () => {
-    if (!(await confirmDialog({ title: '清空隐藏列表？', variant: 'danger', confirmText: '清空' }))) return
+    if (!(await confirmDialog({ title: '清空隐藏列表？', variant: 'danger', confirmText: '清空' })))
+      return
     setLoading(true)
     try {
       const count = await api.clearHiddenSongs()
@@ -445,12 +471,15 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   }
 
   const handleRemoveSecondaryFolder = async (index: number) => {
-    if (!(await confirmDialog({
-      title: '删除这个副文件夹？',
-      description: '歌曲会从列表中移除，但不会删除文件。',
-      variant: 'danger',
-      confirmText: '删除',
-    }))) return
+    if (
+      !(await confirmDialog({
+        title: '删除这个副文件夹？',
+        description: '歌曲会从列表中移除，但不会删除文件。',
+        variant: 'danger',
+        confirmText: '删除',
+      }))
+    )
+      return
     setLoading(true)
     try {
       const secondary = await api.getSecondaryFolders()
@@ -506,17 +535,32 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   return (
     <div className="h-full flex flex-col select-none">
       {/* 头部 */}
-      <div className="px-6 py-4 flex items-center justify-between border-b border-white/5" data-drag-region>
+      <div
+        className="px-6 py-4 flex items-center justify-between border-b border-white/5"
+        data-drag-region
+      >
         <div className="flex items-center gap-4">
           <h2 className="text-2xl font-bold text-white tracking-tight">设置</h2>
           <div className="flex gap-2">
-            <TabButton active={activeTab === 'general'} onClick={() => setActiveTab('general')} primaryColor={primaryColor}>
+            <TabButton
+              active={activeTab === 'general'}
+              onClick={() => setActiveTab('general')}
+              primaryColor={primaryColor}
+            >
               通用
             </TabButton>
-            <TabButton active={activeTab === 'logs'} onClick={() => setActiveTab('logs')} primaryColor={primaryColor}>
+            <TabButton
+              active={activeTab === 'logs'}
+              onClick={() => setActiveTab('logs')}
+              primaryColor={primaryColor}
+            >
               日志
             </TabButton>
-            <TabButton active={activeTab === 'debug'} onClick={() => setActiveTab('debug')} primaryColor={primaryColor}>
+            <TabButton
+              active={activeTab === 'debug'}
+              onClick={() => setActiveTab('debug')}
+              primaryColor={primaryColor}
+            >
               调试
             </TabButton>
           </div>
@@ -564,18 +608,30 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                       </SettingRow>
                     </div>
                     <div className="flex gap-2 mt-4">
-                      <button onClick={handleSelectPrimaryFolder} className={buttonPrimaryClass} style={{ backgroundColor: primaryColor }}>
+                      <button
+                        onClick={handleSelectPrimaryFolder}
+                        className={buttonPrimaryClass}
+                        style={{ backgroundColor: primaryColor }}
+                      >
                         <Edit2 size={14} />
                         更改主文件夹
                       </button>
-                      <button onClick={handleRescan} disabled={loading} className={buttonSecondaryClass}>
+                      <button
+                        onClick={handleRescan}
+                        disabled={loading}
+                        className={buttonSecondaryClass}
+                      >
                         <RefreshCw size={14} className={cn(loading && 'animate-spin')} />
                         重新扫描
                       </button>
                     </div>
                     {loading && progressText && (
                       <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
-                        <RefreshCw size={12} className="animate-spin" style={{ color: primaryColor }} />
+                        <RefreshCw
+                          size={12}
+                          className="animate-spin"
+                          style={{ color: primaryColor }}
+                        />
                         <span>{progressText}</span>
                         {percent > 0 && <span className="text-zinc-500">({percent}%)</span>}
                       </div>
@@ -609,8 +665,65 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                               className="w-8 h-8 rounded-full mx-auto mb-2 ring-2 ring-white/10"
                               style={{ backgroundColor: theme.primary }}
                             />
-                            <p className={cn('text-xs text-center', isSelected ? 'text-white font-medium' : 'text-zinc-500')}>
+                            <p
+                              className={cn(
+                                'text-xs text-center',
+                                isSelected ? 'text-white font-medium' : 'text-zinc-500'
+                              )}
+                            >
                               {theme.name}
+                            </p>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </SettingCard>
+
+                {/* 界面缩放 */}
+                <SettingCard>
+                  <div className="p-6">
+                    <h3 className={sectionTitleClass}>
+                      <Scaling size={20} style={{ color: primaryColor }} />
+                      界面缩放
+                    </h3>
+                    <p className="text-sm text-zinc-500 mb-4">
+                      调整整体字体与 UI 大小，适配不同分辨率 / DPI 屏幕
+                    </p>
+                    <div className="grid grid-cols-5 gap-2">
+                      {UI_SCALE_ORDER.map((id) => {
+                        const cfg = UI_SCALE_CONFIG[id]
+                        const isSelected = uiScale === id
+                        return (
+                          <button
+                            key={id}
+                            onClick={() => setUiScale(id as UiScale)}
+                            className={cn(
+                              'p-2.5 rounded-xl border-2 transition-all duration-200 hover:scale-[1.03] active:scale-[0.97]',
+                              isSelected
+                                ? 'border-white/20 bg-white/5'
+                                : 'border-transparent bg-white/[0.03] hover:bg-white/5'
+                            )}
+                          >
+                            <div
+                              className="mx-auto mb-1.5 flex items-center justify-center font-bold text-white"
+                              style={{
+                                color: isSelected ? primaryColor : undefined,
+                                fontSize: `${Math.round(16 * cfg.factor)}px`,
+                              }}
+                            >
+                              A
+                            </div>
+                            <p
+                              className={cn(
+                                'text-xs text-center mb-0.5',
+                                isSelected ? 'text-white font-medium' : 'text-zinc-500'
+                              )}
+                            >
+                              {cfg.label}
+                            </p>
+                            <p className="text-[10px] text-center text-zinc-600 leading-tight">
+                              {cfg.description}
                             </p>
                           </button>
                         )
@@ -626,10 +739,16 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                       <Folder size={20} className="text-blue-400" />
                       副文件夹
                     </h3>
-                    <p className="text-xs text-zinc-600 mb-4">添加额外的音乐文件夹，歌曲会合并到本地音乐中</p>
+                    <p className="text-xs text-zinc-600 mb-4">
+                      添加额外的音乐文件夹，歌曲会合并到本地音乐中
+                    </p>
                     <div className="space-y-3">
                       {secondaryFolders.map((folder, index) => (
-                        <SettingRow key={folder} title={folder} description={`副文件夹 ${index + 1}`}>
+                        <SettingRow
+                          key={folder}
+                          title={folder}
+                          description={`副文件夹 ${index + 1}`}
+                        >
                           <button
                             onClick={() => handleRemoveSecondaryFolder(index)}
                             disabled={loading}
@@ -660,12 +779,20 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                     </h3>
                     <div className="space-y-3">
                       <SettingRow title="播放历史" description="清空所有播放记录">
-                        <button onClick={handleClearPlayHistory} disabled={loading} className={buttonDangerClass}>
+                        <button
+                          onClick={handleClearPlayHistory}
+                          disabled={loading}
+                          className={buttonDangerClass}
+                        >
                           清空
                         </button>
                       </SettingRow>
                       <SettingRow title="隐藏列表" description="恢复所有隐藏的歌曲">
-                        <button onClick={handleClearHiddenSongs} disabled={loading} className={buttonDangerClass}>
+                        <button
+                          onClick={handleClearHiddenSongs}
+                          disabled={loading}
+                          className={buttonDangerClass}
+                        >
                           清空
                         </button>
                       </SettingRow>
@@ -756,7 +883,8 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                             </div>
                             {updateInfo.publishedAt && (
                               <p className="text-xs text-zinc-600">
-                                发布于 {new Date(updateInfo.publishedAt).toLocaleDateString('zh-CN')}
+                                发布于{' '}
+                                {new Date(updateInfo.publishedAt).toLocaleDateString('zh-CN')}
                               </p>
                             )}
                           </div>
@@ -772,12 +900,12 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                             </button>
                           </div>
                         )}
-                        {updateError && (
-                          <p className="text-xs text-red-400 mt-1">{updateError}</p>
-                        )}
+                        {updateError && <p className="text-xs text-red-400 mt-1">{updateError}</p>}
                       </div>
 
-                      <p className="text-zinc-600 pt-2">本地音乐播放器，支持 MP3、FLAC、WAV 等格式。</p>
+                      <p className="text-zinc-600 pt-2">
+                        本地音乐播放器，支持 MP3、FLAC、WAV 等格式。
+                      </p>
                     </div>
                   </div>
                 </SettingCard>
@@ -842,7 +970,11 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                           <RefreshCw size={14} />
                           刷新
                         </button>
-                        <button onClick={handleClearLogs} disabled={loading} className={buttonDangerClass}>
+                        <button
+                          onClick={handleClearLogs}
+                          disabled={loading}
+                          className={buttonDangerClass}
+                        >
                           <Trash2 size={14} />
                           清空
                         </button>
@@ -859,7 +991,9 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                               ? 'text-white'
                               : 'bg-white/5 text-zinc-500 hover:text-zinc-300'
                           )}
-                          style={logFilter === filter ? { backgroundColor: primaryColor } : undefined}
+                          style={
+                            logFilter === filter ? { backgroundColor: primaryColor } : undefined
+                          }
                         >
                           {filter === 'all' ? '全部' : filter === 'info' ? '信息' : '错误'}
                         </button>
@@ -871,15 +1005,26 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                       ) : (
                         <div className="space-y-2">
                           {logs.map((log) => (
-                            <div key={log.id} className="flex items-start gap-3 p-3 bg-white/[0.03] rounded-lg border border-white/5">
+                            <div
+                              key={log.id}
+                              className="flex items-start gap-3 p-3 bg-white/[0.03] rounded-lg border border-white/5"
+                            >
                               <div className="mt-0.5">{getLogIcon(log.level)}</div>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-1">
-                                  <span className={cn('text-xs font-medium', getLogColor(log.level))}>{log.level}</span>
-                                  <span className="text-xs text-zinc-600">{new Date(log.created_at).toLocaleString('zh-CN')}</span>
+                                  <span
+                                    className={cn('text-xs font-medium', getLogColor(log.level))}
+                                  >
+                                    {log.level}
+                                  </span>
+                                  <span className="text-xs text-zinc-600">
+                                    {new Date(log.created_at).toLocaleString('zh-CN')}
+                                  </span>
                                 </div>
                                 <p className="text-sm text-zinc-400 break-words">{log.message}</p>
-                                {log.target && <p className="text-xs text-zinc-600 mt-1">目标: {log.target}</p>}
+                                {log.target && (
+                                  <p className="text-xs text-zinc-600 mt-1">目标: {log.target}</p>
+                                )}
                               </div>
                             </div>
                           ))}
@@ -906,15 +1051,31 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                       <Trash2 size={20} className="text-red-400" />
                       数据清除
                     </h3>
-                    <p className="text-xs text-zinc-600 mb-4">清除所有历史数据，包括播放历史、喜欢列表、隐藏列表等</p>
+                    <p className="text-xs text-zinc-600 mb-4">
+                      清除所有历史数据，包括播放历史、喜欢列表、隐藏列表等
+                    </p>
                     <div className="space-y-3">
-                      <SettingRow title="清除全部历史数据" description="清空播放历史、喜欢列表、隐藏列表、操作日志">
-                        <button onClick={handleClearAllData} disabled={loading} className={cn(buttonDangerClass, 'bg-red-500 hover:bg-red-600 text-white')}>
+                      <SettingRow
+                        title="清除全部历史数据"
+                        description="清空播放历史、喜欢列表、隐藏列表、操作日志"
+                      >
+                        <button
+                          onClick={handleClearAllData}
+                          disabled={loading}
+                          className={cn(
+                            buttonDangerClass,
+                            'bg-red-500 hover:bg-red-600 text-white'
+                          )}
+                        >
                           清除全部
                         </button>
                       </SettingRow>
                       <SettingRow title="仅清除播放历史" description="保留喜欢列表和隐藏列表">
-                        <button onClick={handleClearPlayHistory} disabled={loading} className={buttonDangerClass}>
+                        <button
+                          onClick={handleClearPlayHistory}
+                          disabled={loading}
+                          className={buttonDangerClass}
+                        >
                           清除
                         </button>
                       </SettingRow>
@@ -928,15 +1089,23 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                       <AlertCircle size={20} className="text-yellow-400" />
                       操作日志
                     </h3>
-                    <p className="text-xs text-zinc-600 mb-4">记录用户操作和后台执行情况，便于排查问题</p>
+                    <p className="text-xs text-zinc-600 mb-4">
+                      记录用户操作和后台执行情况，便于排查问题
+                    </p>
                     <div className="bg-black/30 rounded-xl p-4 max-h-96 overflow-y-auto border border-white/5">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm text-zinc-500">日志记录</span>
                         <div className="flex gap-2">
-                          <button onClick={copyDebugLogs} className="text-xs px-2 py-1 bg-white/5 rounded hover:bg-white/10 text-zinc-500 transition-colors">
+                          <button
+                            onClick={copyDebugLogs}
+                            className="text-xs px-2 py-1 bg-white/5 rounded hover:bg-white/10 text-zinc-500 transition-colors"
+                          >
                             复制
                           </button>
-                          <button onClick={clearDebugLogs} className="text-xs px-2 py-1 bg-white/5 rounded hover:bg-white/10 text-zinc-500 transition-colors">
+                          <button
+                            onClick={clearDebugLogs}
+                            className="text-xs px-2 py-1 bg-white/5 rounded hover:bg-white/10 text-zinc-500 transition-colors"
+                          >
                             清空
                           </button>
                         </div>

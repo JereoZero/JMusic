@@ -11,7 +11,8 @@ import { THEMES, DEFAULT_THEME_ID, type ThemeId } from './config/themes'
     if (raw) {
       const parsed = JSON.parse(raw)
       const themeId = parsed?.state?.currentThemeId as ThemeId | undefined
-      const primary = themeId && THEMES[themeId] ? THEMES[themeId].primary : THEMES[DEFAULT_THEME_ID].primary
+      const primary =
+        themeId && THEMES[themeId] ? THEMES[themeId].primary : THEMES[DEFAULT_THEME_ID].primary
       document.documentElement.style.setProperty('--primary-color', primary)
       document.documentElement.style.setProperty('--logo-color', primary)
     }

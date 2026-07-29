@@ -26,10 +26,12 @@ export function useScanProgress() {
     let unlisten: (() => void) | null = null
     listen<ScanProgressEvent>('scan_progress', (event) => {
       if (!cancelled) setProgress(event.payload)
-    }).then((fn) => {
-      if (cancelled) fn()
-      else unlisten = fn
-    }).catch((e) => console.error('scan_progress listen failed:', e))
+    })
+      .then((fn) => {
+        if (cancelled) fn()
+        else unlisten = fn
+      })
+      .catch((e) => console.error('scan_progress listen failed:', e))
     return () => {
       cancelled = true
       unlisten?.()

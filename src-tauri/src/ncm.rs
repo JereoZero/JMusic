@@ -14,23 +14,23 @@ pub fn is_ncm_file(path: &Path) -> bool {
 #[allow(dead_code)]
 pub fn extract_ncm_metadata(path: &Path) -> Option<(String, String, String, Option<String>)> {
     use std::fs;
-    
+
     let buffer = fs::read(path).ok()?;
-    
+
     // NCM 文件头魔数
     const NCM_MAGIC: &[u8] = &[0x43, 0x54, 0x45, 0x4E, 0x46, 0x44, 0x41, 0x4D];
-    
+
     // 检查魔数
     if buffer.len() < 8 || &buffer[0..8] != NCM_MAGIC {
         return None;
     }
-    
+
     let filename = path
         .file_stem()
         .and_then(|n| n.to_str())
         .unwrap_or("Unknown")
         .to_string();
-    
+
     // 尝试从文件名解析 (通常格式: "歌手 - 歌曲名")
     let (artist, title) = if let Some(dash_pos) = filename.find(" - ") {
         let artist = filename[..dash_pos].trim().to_string();
@@ -39,6 +39,6 @@ pub fn extract_ncm_metadata(path: &Path) -> Option<(String, String, String, Opti
     } else {
         ("Unknown Artist".to_string(), filename.clone())
     };
-    
+
     Some((title, artist, "Unknown Album".to_string(), None))
 }

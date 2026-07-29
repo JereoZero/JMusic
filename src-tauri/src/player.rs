@@ -1,17 +1,20 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 use ts_rs::TS;
 
-use kira::{
-    AudioManager, AudioManagerSettings, DefaultBackend, Decibels, Tween,
-    sound::PlaybackState as KiraPlaybackState,
-    sound::streaming::{Decoder as KiraDecoder, StreamingSoundData, StreamingSoundHandle},
-};
-use crate::dsd_decoder::{DsdDecoder, DsdDecoderError};
 use crate::constants::PROGRESS_EMIT_INTERVAL_MS;
+use crate::dsd_decoder::{DsdDecoder, DsdDecoderError};
+use kira::{
+    sound::streaming::{Decoder as KiraDecoder, StreamingSoundData, StreamingSoundHandle},
+    sound::PlaybackState as KiraPlaybackState,
+    AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Tween,
+};
 
 /// 线性音量 (0.0-1.0) 转换为 kira Decibels。
 fn amplitude_to_decibels(amplitude: f32) -> Decibels {
@@ -59,6 +62,8 @@ pub struct AudioPlayer {
     progress_task: tauri::async_runtime::JoinHandle<()>,
     /// 串行化 play 操作，防止快速切歌时并发 play 导致旧音轨泄漏
     play_lock: Arc<Mutex<()>>,
+    /// 播放请求代数。play/stop 都会递增，用于取消 decoder 创建期间过期的 play 请求。
+    play_generation: Arc<AtomicU64>,
 }
 
 impl AudioPlayer {
@@ -74,11 +79,8 @@ impl AudioPlayer {
         let handle = Arc::new(Mutex::new(None));
 
         // 启动进度轮询 task：检测播放完成 + 定期 emit playback_progress
-        let progress_task = Self::start_progress_loop(
-            handle.clone(),
-            state.clone(),
-            app_handle.clone(),
-        );
+        let progress_task =
+            Self::start_progress_loop(handle.clone(), state.clone(), app_handle.clone());
 
         info!("Audio player initialized (kira backend)");
         Ok(Self {
@@ -88,6 +90,7 @@ impl AudioPlayer {
             app_handle,
             progress_task,
             play_lock: Arc::new(Mutex::new(())),
+            play_generation: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -133,9 +136,12 @@ impl AudioPlayer {
                     }
                     drop(handle_guard);
 
-                    if let Err(e) = app_handle.emit("track_finished", serde_json::json!({
-                        "duration": finished_duration.unwrap_or(0.0)
-                    })) {
+                    if let Err(e) = app_handle.emit(
+                        "track_finished",
+                        serde_json::json!({
+                            "duration": finished_duration.unwrap_or(0.0)
+                        }),
+                    ) {
                         debug!("Failed to emit track_finished: {}", e);
                     }
                     info!("Track finished (duration: {:?})", finished_duration);
@@ -153,10 +159,13 @@ impl AudioPlayer {
                     }
 
                     let duration = state.read().await.duration;
-                    if let Err(e) = app_handle.emit("playback_progress", serde_json::json!({
-                        "position": position,
-                        "duration": duration.unwrap_or(0.0)
-                    })) {
+                    if let Err(e) = app_handle.emit(
+                        "playback_progress",
+                        serde_json::json!({
+                            "position": position,
+                            "duration": duration.unwrap_or(0.0)
+                        }),
+                    ) {
                         debug!("Failed to emit playback_progress: {}", e);
                     }
                 }
@@ -165,6 +174,8 @@ impl AudioPlayer {
     }
 
     pub async fn play(&self, path: &str) -> Result<(), String> {
+        let request_generation = self.play_generation.fetch_add(1, Ordering::AcqRel) + 1;
+
         // 串行化 play 操作，防止快速切歌时并发 play 导致旧音轨泄漏
         let _guard = self.play_lock.lock().await;
 
@@ -185,38 +196,50 @@ impl AudioPlayer {
 
         let sound_data = StreamingSoundData::from_decoder(decoder);
 
-        // 停止当前播放
-        {
-            let mut handle_guard = self.handle.lock().await;
-            // 二次确认：如果在 decoder 创建期间用户调用了 stop，放弃本次 play
-            // 避免"点击 stop 后歌曲仍开始播放"的竞态
-            let current_state = self.state.read().await.state;
-            if current_state == PlaybackState::Stopped {
-                info!("Play aborted: stop was called during decoder creation");
-                return Ok(());
-            }
-            if let Some(ref mut h) = *handle_guard {
-                h.stop(Tween::default());
-            }
-            *handle_guard = None;
+        if self.play_generation.load(Ordering::Acquire) != request_generation {
+            info!("Play request superseded before audio start: {}", path);
+            return Err("Play request superseded".to_string());
         }
 
         // 先读取音量，再 play，消除 play 与 set_volume 之间的 await 窗口
         // 避免 manager.play() 后以默认音量 1.0 输出一个 buffer 的爆音
         let volume = self.state.read().await.volume;
 
+        // 停止当前播放
+        let mut handle_guard = self.handle.lock().await;
+        if self.play_generation.load(Ordering::Acquire) != request_generation {
+            info!("Play request cancelled before replacing handle: {}", path);
+            return Err("Play request cancelled".to_string());
+        }
+        if let Some(ref mut h) = *handle_guard {
+            h.stop(Tween::default());
+        }
+        *handle_guard = None;
+
         // 播放新音轨
-        let mut new_handle = self
-            .manager
-            .lock()
-            .await
-            .play(sound_data)
-            .map_err(|e| e.to_string())?;
+        let mut manager_guard = self.manager.lock().await;
+        if self.play_generation.load(Ordering::Acquire) != request_generation {
+            info!("Play request cancelled before manager play: {}", path);
+            return Err("Play request cancelled".to_string());
+        }
+        let mut new_handle = manager_guard.play(sound_data).map_err(|e| e.to_string())?;
 
         // 立即设置音量（play 与 set_volume 之间无 await，窗口为亚微秒级）
         new_handle.set_volume(amplitude_to_decibels(volume), Tween::default());
 
-        *self.handle.lock().await = Some(new_handle);
+        *handle_guard = Some(new_handle);
+        drop(manager_guard);
+        drop(handle_guard);
+
+        if self.play_generation.load(Ordering::Acquire) != request_generation {
+            let mut handle_guard = self.handle.lock().await;
+            if let Some(ref mut h) = *handle_guard {
+                h.stop(Tween::default());
+            }
+            *handle_guard = None;
+            info!("Play request cancelled before state update: {}", path);
+            return Err("Play request cancelled".to_string());
+        }
 
         // 更新 state
         {
@@ -230,10 +253,13 @@ impl AudioPlayer {
         info!("Playing: {} (duration: {:?}s)", path, duration);
 
         // emit 初始进度
-        if let Err(e) = self.app_handle.emit("playback_progress", serde_json::json!({
-            "position": 0.0,
-            "duration": duration.unwrap_or(0.0)
-        })) {
+        if let Err(e) = self.app_handle.emit(
+            "playback_progress",
+            serde_json::json!({
+                "position": 0.0,
+                "duration": duration.unwrap_or(0.0)
+            }),
+        ) {
             debug!("Failed to emit playback_progress: {}", e);
         }
 
@@ -252,8 +278,10 @@ impl AudioPlayer {
 
             info!("Paused at {:.1}s", position);
         } else {
-            // handle 为 None（play 进行中或歌曲已结束）：仍记录 Paused 意图，
-            // 避免 play 完成后自动开始播放（play() 的 state 二次检查会看到 Paused 并放弃）
+            // handle 为 None（play 进行中或歌曲已结束）：记录 Paused 意图。
+            // 注意：若 play() 正在创建 decoder，play() 完成后会设置 state=Playing 覆盖此 Paused。
+            // 这是预期行为——用户主动选了新歌应该播放。如需"加载后暂停"语义，
+            // 需在 play() 的 state 更新前检查当前 state 是否为 Paused。
             let mut st = self.state.write().await;
             if st.state != PlaybackState::Stopped {
                 st.state = PlaybackState::Paused;
@@ -290,9 +318,12 @@ impl AudioPlayer {
             }
             // 真正的 handle 丢失（音频输出流故障）
             warn!("Resume failed: no active sound handle");
-            if let Err(e) = self.app_handle.emit("playback_error", serde_json::json!({
-                "error": "Audio output stream lost, cannot resume"
-            })) {
+            if let Err(e) = self.app_handle.emit(
+                "playback_error",
+                serde_json::json!({
+                    "error": "Audio output stream lost, cannot resume"
+                }),
+            ) {
                 warn!("Failed to emit playback_error: {}", e);
             }
             Err("Audio output stream lost, cannot resume".to_string())
@@ -300,6 +331,8 @@ impl AudioPlayer {
     }
 
     pub async fn stop(&self) -> Result<(), String> {
+        self.play_generation.fetch_add(1, Ordering::AcqRel);
+
         {
             let mut handle_guard = self.handle.lock().await;
             if let Some(ref mut h) = *handle_guard {
@@ -342,6 +375,12 @@ impl AudioPlayer {
         let mut st = self.state.write().await;
         st.volume = clamped;
         Ok(())
+    }
+
+    /// 轻量获取 duration，仅读 state 不同步 kira、不 clone PlayerState
+    /// 用于 seek 校验等只需 duration 的场景，避免 get_state() 的 handle lock + write + clone 开销
+    pub async fn get_duration(&self) -> Option<f64> {
+        self.state.read().await.duration
     }
 
     pub async fn get_state(&self) -> PlayerState {
@@ -423,22 +462,43 @@ mod tests {
     #[test]
     fn map_kira_state_playing_variants_to_playing() {
         // Playing/Pausing/Resuming/Stopping 都视为播放中
-        assert_eq!(map_kira_state(KiraPlaybackState::Playing), PlaybackState::Playing);
-        assert_eq!(map_kira_state(KiraPlaybackState::Pausing), PlaybackState::Playing);
-        assert_eq!(map_kira_state(KiraPlaybackState::Resuming), PlaybackState::Playing);
-        assert_eq!(map_kira_state(KiraPlaybackState::Stopping), PlaybackState::Playing);
+        assert_eq!(
+            map_kira_state(KiraPlaybackState::Playing),
+            PlaybackState::Playing
+        );
+        assert_eq!(
+            map_kira_state(KiraPlaybackState::Pausing),
+            PlaybackState::Playing
+        );
+        assert_eq!(
+            map_kira_state(KiraPlaybackState::Resuming),
+            PlaybackState::Playing
+        );
+        assert_eq!(
+            map_kira_state(KiraPlaybackState::Stopping),
+            PlaybackState::Playing
+        );
     }
 
     #[test]
     fn map_kira_state_paused_variants_to_paused() {
         // Paused / WaitingToResume 视为暂停
-        assert_eq!(map_kira_state(KiraPlaybackState::Paused), PlaybackState::Paused);
-        assert_eq!(map_kira_state(KiraPlaybackState::WaitingToResume), PlaybackState::Paused);
+        assert_eq!(
+            map_kira_state(KiraPlaybackState::Paused),
+            PlaybackState::Paused
+        );
+        assert_eq!(
+            map_kira_state(KiraPlaybackState::WaitingToResume),
+            PlaybackState::Paused
+        );
     }
 
     #[test]
     fn map_kira_state_stopped_to_stopped() {
-        assert_eq!(map_kira_state(KiraPlaybackState::Stopped), PlaybackState::Stopped);
+        assert_eq!(
+            map_kira_state(KiraPlaybackState::Stopped),
+            PlaybackState::Stopped
+        );
     }
 
     #[test]

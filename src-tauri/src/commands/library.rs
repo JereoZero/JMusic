@@ -1,8 +1,8 @@
 use tauri::State;
 
+use super::common::{validate_path_in_music_folder, ApiResponse, MAX_BATCH_SIZE};
 use crate::database::Database;
 use crate::database::Song;
-use super::common::{ApiResponse, validate_path_in_music_folder, MAX_BATCH_SIZE};
 
 #[tauri::command]
 pub async fn hide_song(
@@ -21,10 +21,7 @@ pub async fn hide_song(
 }
 
 #[tauri::command]
-pub async fn unhide_song(
-    db: State<'_, Database>,
-    path: String,
-) -> Result<ApiResponse<()>, String> {
+pub async fn unhide_song(db: State<'_, Database>, path: String) -> Result<ApiResponse<()>, String> {
     if let Err(e) = validate_path_in_music_folder(&db, &path).await {
         return Ok(ApiResponse::err(e));
     }
@@ -59,11 +56,14 @@ pub async fn hide_songs_batch(
 ) -> Result<ApiResponse<usize>, String> {
     if paths.len() > MAX_BATCH_SIZE {
         return Ok(ApiResponse::err(format!(
-            "Too many paths (max {})", MAX_BATCH_SIZE
+            "Too many paths (max {})",
+            MAX_BATCH_SIZE
         )));
     }
 
-    let music_folder = db.get_setting("music_folder").await
+    let music_folder = db
+        .get_setting("music_folder")
+        .await
         .map_err(|e| e.to_string())?
         .ok_or("Music folder not configured".to_string())?;
 
@@ -71,14 +71,20 @@ pub async fn hide_songs_batch(
     // 同时获取二级文件夹符号链接目标，用于安全校验
     let valid_paths: Vec<String> = tokio::task::spawn_blocking(move || {
         let secondary_targets = crate::path_validator::get_secondary_targets(&music_folder);
-        paths.into_iter()
-            .filter(|p| crate::path_validator::is_path_in_music_folder(p, &music_folder, &secondary_targets))
+        paths
+            .into_iter()
+            .filter(|p| {
+                crate::path_validator::is_path_in_music_folder(p, &music_folder, &secondary_targets)
+            })
             .collect()
     })
     .await
     .map_err(|e| e.to_string())?;
 
-    match db.hide_songs_batch(valid_paths, is_auto.unwrap_or(false)).await {
+    match db
+        .hide_songs_batch(valid_paths, is_auto.unwrap_or(false))
+        .await
+    {
         Ok(count) => Ok(ApiResponse::ok(count)),
         Err(e) => Ok(ApiResponse::err(e)),
     }
@@ -91,11 +97,14 @@ pub async fn unhide_songs_batch(
 ) -> Result<ApiResponse<usize>, String> {
     if paths.len() > MAX_BATCH_SIZE {
         return Ok(ApiResponse::err(format!(
-            "Too many paths (max {})", MAX_BATCH_SIZE
+            "Too many paths (max {})",
+            MAX_BATCH_SIZE
         )));
     }
 
-    let music_folder = db.get_setting("music_folder").await
+    let music_folder = db
+        .get_setting("music_folder")
+        .await
         .map_err(|e| e.to_string())?
         .ok_or("Music folder not configured".to_string())?;
 
@@ -103,8 +112,11 @@ pub async fn unhide_songs_batch(
     // 同时获取二级文件夹符号链接目标，用于安全校验
     let valid_paths: Vec<String> = tokio::task::spawn_blocking(move || {
         let secondary_targets = crate::path_validator::get_secondary_targets(&music_folder);
-        paths.into_iter()
-            .filter(|p| crate::path_validator::is_path_in_music_folder(p, &music_folder, &secondary_targets))
+        paths
+            .into_iter()
+            .filter(|p| {
+                crate::path_validator::is_path_in_music_folder(p, &music_folder, &secondary_targets)
+            })
             .collect()
     })
     .await

@@ -1,10 +1,10 @@
-use std::path::PathBuf;
-use std::fs;
-use std::io::{Cursor, Write};
-use std::time::UNIX_EPOCH;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::ImageReader;
 use md5::compute;
+use std::fs;
+use std::io::{Cursor, Write};
+use std::path::PathBuf;
+use std::time::UNIX_EPOCH;
 
 pub const THUMBNAIL_SMALL_SIZE: u32 = 56;
 pub const THUMBNAIL_LARGE_SIZE: u32 = 200;
@@ -94,7 +94,10 @@ pub fn get_thumbnail_base64(song_path: &str, size: u32) -> Option<String> {
     let thumbnail_path = match get_thumbnail_path(song_path, size) {
         Ok(Some(p)) => p,
         _ => {
-            tracing::debug!("get_thumbnail_base64: cannot resolve path for {}", song_path);
+            tracing::debug!(
+                "get_thumbnail_base64: cannot resolve path for {}",
+                song_path
+            );
             return None;
         }
     };
@@ -103,7 +106,11 @@ pub fn get_thumbnail_base64(song_path: &str, size: u32) -> Option<String> {
         match fs::read(&thumbnail_path) {
             Ok(bytes) => Some(STANDARD.encode(&bytes)),
             Err(e) => {
-                tracing::debug!("get_thumbnail_base64: read error {:?}: {}", thumbnail_path, e);
+                tracing::debug!(
+                    "get_thumbnail_base64: read error {:?}: {}",
+                    thumbnail_path,
+                    e
+                );
                 None
             }
         }
@@ -130,8 +137,8 @@ pub fn create_thumbnail(cover_data: &[u8], song_path: &str, size: u32) -> Result
     let thumbnail = img.resize_to_fill(size, size, filter);
 
     let hash = path_to_hash(song_path);
-    let mtime = get_source_mtime(song_path)
-        .ok_or_else(|| "Failed to get source file mtime".to_string())?;
+    let mtime =
+        get_source_mtime(song_path).ok_or_else(|| "Failed to get source file mtime".to_string())?;
     let thumbnail_path = get_thumbnails_dir()?.join(thumbnail_filename(&hash, mtime, size));
 
     // 清理同一首歌同一尺寸的旧 mtime 缩略图（缓存失效）
@@ -158,7 +165,11 @@ pub fn create_thumbnail(cover_data: &[u8], song_path: &str, size: u32) -> Result
 }
 
 #[allow(dead_code)]
-pub fn get_or_create_thumbnail(cover_data: &[u8], song_path: &str, size: u32) -> Result<String, String> {
+pub fn get_or_create_thumbnail(
+    cover_data: &[u8],
+    song_path: &str,
+    size: u32,
+) -> Result<String, String> {
     if let Some(cached) = get_thumbnail_base64(song_path, size) {
         return Ok(cached);
     }
@@ -243,7 +254,8 @@ mod tests {
     #[test]
     fn test_get_thumbnail_path_nonexistent_file() {
         // 源文件不存在时，get_thumbnail_path 返回 None
-        let result = get_thumbnail_path("/nonexistent/path/test.mp3", THUMBNAIL_SMALL_SIZE).unwrap();
+        let result =
+            get_thumbnail_path("/nonexistent/path/test.mp3", THUMBNAIL_SMALL_SIZE).unwrap();
         assert!(result.is_none());
     }
 
@@ -254,22 +266,24 @@ mod tests {
         let temp_file = temp_dir.join("jlocal_thumbnail_test.mp3");
         fs::write(&temp_file, b"test").unwrap();
 
-        let path_small = get_thumbnail_path(
-            temp_file.to_str().unwrap(),
-            THUMBNAIL_SMALL_SIZE,
-        ).unwrap();
-        let path_large = get_thumbnail_path(
-            temp_file.to_str().unwrap(),
-            THUMBNAIL_LARGE_SIZE,
-        ).unwrap();
+        let path_small =
+            get_thumbnail_path(temp_file.to_str().unwrap(), THUMBNAIL_SMALL_SIZE).unwrap();
+        let path_large =
+            get_thumbnail_path(temp_file.to_str().unwrap(), THUMBNAIL_LARGE_SIZE).unwrap();
 
         assert!(path_small.is_some());
         assert!(path_large.is_some());
 
         let path_small = path_small.unwrap();
         let path_large = path_large.unwrap();
-        assert!(path_small.to_str().unwrap().ends_with(&format!("_{}.jpg", THUMBNAIL_SMALL_SIZE)));
-        assert!(path_large.to_str().unwrap().ends_with(&format!("_{}.jpg", THUMBNAIL_LARGE_SIZE)));
+        assert!(path_small
+            .to_str()
+            .unwrap()
+            .ends_with(&format!("_{}.jpg", THUMBNAIL_SMALL_SIZE)));
+        assert!(path_large
+            .to_str()
+            .unwrap()
+            .ends_with(&format!("_{}.jpg", THUMBNAIL_LARGE_SIZE)));
 
         // 清理
         let _ = fs::remove_file(&temp_file);

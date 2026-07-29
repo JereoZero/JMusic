@@ -61,7 +61,8 @@ describe('libraryStore', () => {
       expect(state.likedPaths.size).toBe(0)
       expect(state.hiddenPaths).toBeInstanceOf(Set)
       expect(state.hiddenPaths.size).toBe(0)
-      expect(state.isLoading).toBe(false)
+      // 初始即为加载中（App 启动即 fetchSongs），避免首帧闪现空状态
+      expect(state.isLoading).toBe(true)
     })
   })
 
@@ -156,11 +157,7 @@ describe('libraryStore', () => {
       const path = '/music/concurrent-test.mp3'
 
       // 并发发起 3 次同 path toggleLike
-      await Promise.all([
-        toggleLike(path),
-        toggleLike(path),
-        toggleLike(path),
-      ])
+      await Promise.all([toggleLike(path), toggleLike(path), toggleLike(path)])
 
       // 串行执行：每次基于前一次结果切换 → true → false → true
       // 若无串行化（竞态）：3 次都基于初始 false，全为 true
@@ -213,11 +210,7 @@ describe('libraryStore', () => {
       const path = '/music/concurrent-hidden-test.mp3'
 
       // 并发发起 3 次同 path toggleHidden
-      await Promise.all([
-        toggleHidden(path),
-        toggleHidden(path),
-        toggleHidden(path),
-      ])
+      await Promise.all([toggleHidden(path), toggleHidden(path), toggleHidden(path)])
 
       // 串行执行：每次基于前一次结果切换 → hide → unhide → hide
       // 若无串行化（竞态）：3 次都基于初始 false，全为 hide
@@ -244,10 +237,7 @@ describe('libraryStore', () => {
       const { toggleHidden } = useLibraryStore.getState()
 
       // 同 path 并发：应串行（maxActive === 1）
-      await Promise.all([
-        toggleHidden('/music/x.mp3'),
-        toggleHidden('/music/x.mp3'),
-      ])
+      await Promise.all([toggleHidden('/music/x.mp3'), toggleHidden('/music/x.mp3')])
 
       expect(maxActive).toBe(1)
     })

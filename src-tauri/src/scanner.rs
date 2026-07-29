@@ -1,18 +1,21 @@
+use crate::constants::{
+    is_encrypted_extension, is_playable_extension, ENCRYPTED_AUDIO_EXTENSIONS,
+    UNSUPPORTED_AUDIO_EXTENSIONS,
+};
 use crate::database::Song;
 use crate::metadata::MetadataExtractor;
 use crate::ncm::is_ncm_file;
 use crate::qmc::is_qmc_file;
-use crate::constants::{is_playable_extension, is_encrypted_extension, ENCRYPTED_AUDIO_EXTENSIONS, UNSUPPORTED_AUDIO_EXTENSIONS};
-use std::sync::Arc;
 use chrono::Utc;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tauri::{AppHandle, Emitter};
-use tracing::{info, debug, warn};
+use tracing::{debug, info, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -53,7 +56,8 @@ impl FolderScanner {
         let app_handle_clone = app_handle.clone();
         tokio::task::spawn_blocking(move || {
             Self::scan_blocking(&folder_path, &existing_mtimes, &app_handle_clone)
-        }).await?
+        })
+        .await?
     }
 
     fn scan_blocking(
@@ -111,19 +115,24 @@ impl FolderScanner {
 
             // 阶段 1 进度反馈：每 WALK_EMIT_INTERVAL 个文件 emit 一次
             if scanned.is_multiple_of(WALK_EMIT_INTERVAL) {
-                let _ = app_handle.emit("scan_progress", serde_json::json!({
-                    "phase": "walking",
-                    "scanned": scanned,
-                    "supported": supported_files.len(),
-                    "skipped": skipped,
-                }));
+                let _ = app_handle.emit(
+                    "scan_progress",
+                    serde_json::json!({
+                        "phase": "walking",
+                        "scanned": scanned,
+                        "supported": supported_files.len(),
+                        "skipped": skipped,
+                    }),
+                );
             }
 
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 let ext_lower = ext.to_lowercase();
 
-                let is_supported = is_playable_extension(&ext_lower) && !is_encrypted_extension(&ext_lower);
-                let is_encrypted = is_ncm_file(path) || is_qmc_file(path) || is_encrypted_extension(&ext_lower);
+                let is_supported =
+                    is_playable_extension(&ext_lower) && !is_encrypted_extension(&ext_lower);
+                let is_encrypted =
+                    is_ncm_file(path) || is_qmc_file(path) || is_encrypted_extension(&ext_lower);
 
                 if is_supported {
                     // 获取文件 mtime 用于增量扫描判断（毫秒精度，避免同秒内修改被漏判）
@@ -159,13 +168,16 @@ impl FolderScanner {
         );
 
         // 阶段 1 完成：emit 汇总
-        let _ = app_handle.emit("scan_progress", serde_json::json!({
-            "phase": "walking_done",
-            "scanned": scanned,
-            "supported": supported_files.len(),
-            "encrypted": encrypted_files.len(),
-            "skipped": skipped,
-        }));
+        let _ = app_handle.emit(
+            "scan_progress",
+            serde_json::json!({
+                "phase": "walking_done",
+                "scanned": scanned,
+                "supported": supported_files.len(),
+                "encrypted": encrypted_files.len(),
+                "skipped": skipped,
+            }),
+        );
 
         // 阶段 2：rayon 并行提取元数据（CPU 密集，多核并行加速）
         // 用 AtomicUsize 计数，定期 emit 进度（AppHandle 是 Send + Sync，可安全传入 rayon 闭包）
@@ -177,11 +189,14 @@ impl FolderScanner {
                 let r = Self::process_normal_file(path, *mtime);
                 let done = processed.fetch_add(1, Ordering::Relaxed) + 1;
                 if done.is_multiple_of(METADATA_EMIT_INTERVAL) || done == total {
-                    let _ = app_handle.emit("scan_progress", serde_json::json!({
-                        "phase": "metadata",
-                        "processed": done,
-                        "total": total,
-                    }));
+                    let _ = app_handle.emit(
+                        "scan_progress",
+                        serde_json::json!({
+                            "phase": "metadata",
+                            "processed": done,
+                            "total": total,
+                        }),
+                    );
                 }
                 r
             })
@@ -204,7 +219,9 @@ impl FolderScanner {
         // 阶段 3：处理加密/不支持文件（轻量级，串行即可）
         let encrypted_songs: Vec<Song> = encrypted_files
             .into_iter()
-            .filter_map(|(path, ext)| Self::process_unsupported_file(&path, &ext, is_encrypted_extension(&ext)))
+            .filter_map(|(path, ext)| {
+                Self::process_unsupported_file(&path, &ext, is_encrypted_extension(&ext))
+            })
             .collect();
 
         info!(
@@ -253,8 +270,14 @@ impl FolderScanner {
         Ok(Song {
             id: Uuid::new_v4().to_string(),
             title: metadata.title.clone().unwrap_or_else(|| filename.clone()),
-            artist: metadata.artist.clone().unwrap_or_else(|| "Unknown Artist".to_string()),
-            album: metadata.album.clone().unwrap_or_else(|| "Unknown Album".to_string()),
+            artist: metadata
+                .artist
+                .clone()
+                .unwrap_or_else(|| "Unknown Artist".to_string()),
+            album: metadata
+                .album
+                .clone()
+                .unwrap_or_else(|| "Unknown Album".to_string()),
             duration,
             path: path_str,
             cover: metadata.cover,
@@ -266,19 +289,22 @@ impl FolderScanner {
     }
 
     fn get_duration_from_symphonia(path: &str) -> Option<f64> {
+        use std::fs::File;
+        use std::path::PathBuf;
         use symphonia::core::codecs::CODEC_TYPE_NULL;
         use symphonia::core::formats::FormatOptions;
         use symphonia::core::io::MediaSourceStream;
         use symphonia::core::meta::MetadataOptions;
         use symphonia::core::probe::Hint;
-        use std::fs::File;
-        use std::path::PathBuf;
 
         let path = PathBuf::from(path);
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(e) => {
-                debug!("Failed to open file for duration detection: {:?}: {}", path, e);
+                debug!(
+                    "Failed to open file for duration detection: {:?}: {}",
+                    path, e
+                );
                 return None;
             }
         };
@@ -292,7 +318,12 @@ impl FolderScanner {
         let format_opts = FormatOptions::default();
         let metadata_opts = MetadataOptions::default();
 
-        let probed = match symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts) {
+        let probed = match symphonia::default::get_probe().format(
+            &hint,
+            mss,
+            &format_opts,
+            &metadata_opts,
+        ) {
             Ok(p) => p,
             Err(e) => {
                 debug!("Failed to probe audio format: {:?}: {}", path, e);
@@ -301,7 +332,8 @@ impl FolderScanner {
         };
         let format_reader = probed.format;
 
-        let track = format_reader.tracks()
+        let track = format_reader
+            .tracks()
             .iter()
             .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)?;
 
@@ -314,7 +346,11 @@ impl FolderScanner {
                     return 0.0;
                 }
                 let secs = frames as f64 * tb.numer as f64 / tb.denom as f64;
-                if secs.is_finite() && secs >= 0.0 { secs } else { 0.0 }
+                if secs.is_finite() && secs >= 0.0 {
+                    secs
+                } else {
+                    0.0
+                }
             })
         })
     }

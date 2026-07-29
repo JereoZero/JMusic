@@ -38,7 +38,9 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   songs: [],
   likedPaths: new Set(),
   hiddenPaths: new Set(),
-  isLoading: false,
+  // 初始即为加载中：App 启动 useEffect 会立即 fetchSongs，
+  // 设为 true 避免首帧 songs=[] && isLoading=false 时 UI 闪现“暂无歌曲”空状态
+  isLoading: true,
   error: null,
 
   clearError: () => set({ error: null }),

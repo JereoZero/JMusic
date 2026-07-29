@@ -1,9 +1,9 @@
-use std::path::Path;
-use std::fs;
-use lofty::probe::Probe;
-use lofty::file::TaggedFileExt;
-use lofty::tag::ItemKey;
 use chardetng::EncodingDetector;
+use lofty::file::TaggedFileExt;
+use lofty::probe::Probe;
+use lofty::tag::ItemKey;
+use std::fs;
+use std::path::Path;
 use tracing::debug;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -59,7 +59,10 @@ pub fn extract_embedded_lyrics(audio_path: &Path) -> Option<LyricSource> {
     let probe = match Probe::open(audio_path) {
         Ok(p) => p,
         Err(e) => {
-            debug!("Failed to open audio for lyrics extraction {:?}: {}", audio_path, e);
+            debug!(
+                "Failed to open audio for lyrics extraction {:?}: {}",
+                audio_path, e
+            );
             return None;
         }
     };
@@ -115,7 +118,8 @@ mod tests {
 
     #[test]
     fn test_decode_gbk() {
-        let (encoded, _, _) = encoding_rs::GBK.encode("[00:01.00]\u{4F60}\u{597D}\n[00:02.00]\u{4E16}\u{754C}");
+        let (encoded, _, _) =
+            encoding_rs::GBK.encode("[00:01.00]\u{4F60}\u{597D}\n[00:02.00]\u{4E16}\u{754C}");
         let decoded = decode_lrc_content(&encoded);
         assert_eq!(decoded, "[00:01.00]你好\n[00:02.00]世界");
     }

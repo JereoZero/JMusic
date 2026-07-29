@@ -1,10 +1,8 @@
 use std::path::Path;
 
 const QMC_EXTENSIONS: &[&str] = &[
-    "qmc0", "qmc2", "qmc3", "qmc4", "qmc6", "qmc8",
-    "qmcflac", "qmcogg",
-    "mflac", "mflac0", "mgg", "mgg0", "mgg1", "mggl",
-    "mmp4", "tkm",
+    "qmc0", "qmc2", "qmc3", "qmc4", "qmc6", "qmc8", "qmcflac", "qmcogg", "mflac", "mflac0", "mgg",
+    "mgg0", "mgg1", "mggl", "mmp4", "tkm",
 ];
 
 /// 检查是否是 QMC 文件
@@ -26,7 +24,7 @@ pub fn extract_qmc_metadata(path: &Path) -> Option<(String, String, String)> {
         .and_then(|n| n.to_str())
         .unwrap_or("Unknown")
         .to_string();
-    
+
     // 尝试从文件名解析 (通常格式: "歌手 - 歌曲名")
     let (artist, title) = if let Some(dash_pos) = filename.find(" - ") {
         let artist = filename[..dash_pos].trim().to_string();
@@ -35,6 +33,6 @@ pub fn extract_qmc_metadata(path: &Path) -> Option<(String, String, String)> {
     } else {
         ("Unknown Artist".to_string(), filename.clone())
     };
-    
+
     Some((title, artist, "Unknown Album".to_string()))
 }

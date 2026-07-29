@@ -35,9 +35,11 @@ export function useDragRegion() {
       if (interactive) return
 
       // 调用 Tauri 原生 startDragging API
-      getCurrentWindow().startDragging().catch((err) => {
-        console.error('[useDragRegion] startDragging failed:', err)
-      })
+      getCurrentWindow()
+        .startDragging()
+        .catch((err) => {
+          console.error('[useDragRegion] startDragging failed:', err)
+        })
     }
 
     window.addEventListener('mousedown', handleMouseDown)

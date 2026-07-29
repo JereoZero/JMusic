@@ -25,14 +25,12 @@ export default function PlayerBar({ onToggleLyrics }: { onToggleLyrics?: () => v
   // 仅订阅当前歌曲的喜欢/隐藏布尔切片，避免任意歌曲状态变更都触发重渲染
   const toggleLike = useLibraryStore((s) => s.toggleLike)
   const toggleHidden = useLibraryStore((s) => s.toggleHidden)
-  const isLiked = useLibraryStore((s) =>
-    currentSong ? s.likedPaths.has(currentSong.path) : false
-  )
+  const isLiked = useLibraryStore((s) => (currentSong ? s.likedPaths.has(currentSong.path) : false))
   const isHidden = useLibraryStore((s) =>
     currentSong ? s.hiddenPaths.has(currentSong.path) : false
   )
   const playMode = usePlayerSettingsStore((s) => s.settings.playMode)
-  const toggleShuffle = usePlayQueueStore((s) => s.toggleShuffle)
+  const cyclePlayMode = usePlayQueueStore((s) => s.cyclePlayMode)
   const primaryColor = useThemeStore((s) => THEMES[s.currentThemeId].primary)
   const songDuration = duration > 0 ? duration : (currentSong?.duration ?? 0)
 
@@ -40,24 +38,10 @@ export default function PlayerBar({ onToggleLyrics }: { onToggleLyrics?: () => v
   const cover = useCoverStore((s) => s.cover)
   const playerBarBg = useCoverStore((s) => s.colors.playerBar) || '#181818'
 
-  // 随机按钮：toggleShuffle 内部已根据当前 playMode 决定方向
-  const handleToggleShuffle = useCallback(() => {
-    toggleShuffle()
-  }, [toggleShuffle])
-
-  // 循环按钮：loop <-> list（互斥于 shuffle）
-  const handleToggleRepeat = useCallback(() => {
-    const settings = usePlayerSettingsStore.getState().settings
-    if (settings.playMode === 'loop') {
-      usePlayerSettingsStore.getState().setPlayMode('list')
-    } else {
-      // 若当前是 shuffle，先退出 shuffle 再切 loop
-      if (settings.playMode === 'shuffle') {
-        usePlayQueueStore.getState().unshuffleQueue()
-      }
-      usePlayerSettingsStore.getState().setPlayMode('loop')
-    }
-  }, [])
+  // 合并档位：list → loop → shuffle → list
+  const handleCycleMode = useCallback(() => {
+    cyclePlayMode()
+  }, [cyclePlayMode])
 
   // H1 修复：稳定引用，避免破坏 QueuePanel memo
   const handleCloseQueue = useCallback(() => setShowQueue(false), [])
@@ -95,10 +79,10 @@ export default function PlayerBar({ onToggleLyrics }: { onToggleLyrics?: () => v
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-white truncate">
+          <p className="text-safe-sm font-medium text-white truncate">
             {currentSong?.title || '未在播放'}
           </p>
-          <p className="text-xs truncate text-zinc-500">{currentSong?.artist || ''}</p>
+          <p className="text-safe-xs truncate text-zinc-500">{currentSong?.artist || ''}</p>
         </div>
       </div>
 
@@ -111,8 +95,7 @@ export default function PlayerBar({ onToggleLyrics }: { onToggleLyrics?: () => v
             onTogglePlay={togglePlay}
             onPlayPrev={playPrev}
             onPlayNext={playNext}
-            onToggleShuffle={handleToggleShuffle}
-            onToggleRepeat={handleToggleRepeat}
+            onCycleMode={handleCycleMode}
           />
           <button
             onClick={() => currentSong && toggleLike(currentSong.path)}
@@ -161,7 +144,7 @@ export default function PlayerBar({ onToggleLyrics }: { onToggleLyrics?: () => v
               style={{ backgroundColor: primaryColor }}
             >
               {queueCount > 99 ? '99+' : queueCount}
-          </span>
+            </span>
           )}
         </button>
         <VolumeControl onVolumeChange={setVolume} />

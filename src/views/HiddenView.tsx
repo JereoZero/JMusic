@@ -15,19 +15,27 @@ export default function HiddenView() {
 
   const currentSongPath = usePlayerStore((s) => s.currentSong?.path) ?? null
   const playSong = usePlayerStore((s) => s.playSong)
-  const { songs, isLoading, refreshAll, likedPaths, hiddenPaths, toggleLike, toggleHidden, batchToggleHidden } =
-    useLibraryStore(
-      useShallow((s) => ({
-        songs: s.songs,
-        isLoading: s.isLoading,
-        likedPaths: s.likedPaths,
-        hiddenPaths: s.hiddenPaths,
-        refreshAll: s.refreshAll,
-        toggleLike: s.toggleLike,
-        toggleHidden: s.toggleHidden,
-        batchToggleHidden: s.batchToggleHidden,
-      }))
-    )
+  const {
+    songs,
+    isLoading,
+    refreshAll,
+    likedPaths,
+    hiddenPaths,
+    toggleLike,
+    toggleHidden,
+    batchToggleHidden,
+  } = useLibraryStore(
+    useShallow((s) => ({
+      songs: s.songs,
+      isLoading: s.isLoading,
+      likedPaths: s.likedPaths,
+      hiddenPaths: s.hiddenPaths,
+      refreshAll: s.refreshAll,
+      toggleLike: s.toggleLike,
+      toggleHidden: s.toggleHidden,
+      batchToggleHidden: s.batchToggleHidden,
+    }))
+  )
 
   const hiddenSongs = useMemo(() => {
     return songs.filter((song) => hiddenPaths.has(song.path))
@@ -53,10 +61,7 @@ export default function HiddenView() {
   )
 
   // 稳定引用，避免破坏 SongItem 的 memo
-  const handleToggleLike = useCallback(
-    (path: string) => toggleLike(path, 'hidden'),
-    [toggleLike]
-  )
+  const handleToggleLike = useCallback((path: string) => toggleLike(path, 'hidden'), [toggleLike])
 
   return (
     <div className="h-full flex flex-col select-none">
@@ -94,6 +99,7 @@ export default function HiddenView() {
         emptyIcon={<EyeOff size={48} className="mb-4 opacity-50" />}
         emptyTitle="暂无隐藏的歌曲"
         emptyDescription="在本地音乐中点击隐藏按钮可将歌曲移到这里"
+        isLoading={isLoading}
       />
     </div>
   )

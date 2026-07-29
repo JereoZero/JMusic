@@ -51,12 +51,19 @@ impl DsdDecoder {
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
         let mut hint = Hint::new();
-        if let Some(ext) = std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
+        if let Some(ext) = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+        {
             hint.with_extension(ext);
         }
 
-        let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &Default::default(), &Default::default())?;
+        let probed = symphonia::default::get_probe().format(
+            &hint,
+            mss,
+            &Default::default(),
+            &Default::default(),
+        )?;
         let format_reader = probed.format;
 
         let track = format_reader
@@ -199,7 +206,10 @@ mod tests {
         let result = DsdDecoder::new("/nonexistent/path/to/file.dsf");
         match result {
             Err(DsdDecoderError::Io(_)) => {}
-            other => panic!("expected DsdDecoderError::Io, got {:?}", other.as_ref().err()),
+            other => panic!(
+                "expected DsdDecoderError::Io, got {:?}",
+                other.as_ref().err()
+            ),
         }
     }
 
@@ -226,7 +236,7 @@ mod tests {
         buf.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
         buf.extend_from_slice(&2u16.to_le_bytes()); // block align
         buf.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-        // data chunk
+                                                     // data chunk
         buf.extend_from_slice(b"data");
         buf.extend_from_slice(&data_size.to_le_bytes());
         // 静音数据（全 0）
@@ -261,7 +271,12 @@ mod tests {
         let target = 1000usize; // seek 到第 1000 个采样
         let seeked_to = decoder.seek(target).expect("seek failed");
         // seek 到的位置应该 <= 目标位置（kira Decoder trait 语义：可以 seek 到更早的样本）
-        assert!(seeked_to <= target, "seeked_to ({}) should be <= target ({})", seeked_to, target);
+        assert!(
+            seeked_to <= target,
+            "seeked_to ({}) should be <= target ({})",
+            seeked_to,
+            target
+        );
     }
 
     #[test]
@@ -280,7 +295,11 @@ mod tests {
         assert!(sound_data.num_frames() > 0);
         // duration = num_frames / sample_rate，应接近 0.1 秒
         let duration = sound_data.duration().as_secs_f64();
-        assert!(duration > 0.0, "duration should be positive, got {}", duration);
+        assert!(
+            duration > 0.0,
+            "duration should be positive, got {}",
+            duration
+        );
         let expected_duration = sound_data.num_frames() as f64 / expected_sample_rate as f64;
         assert!(
             (duration - expected_duration).abs() < 0.001,

@@ -16,13 +16,25 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: '⌘ →', description: '下一首' },
       { keys: '←', description: '快退 5 秒' },
       { keys: '→', description: '快进 5 秒' },
+      { keys: '↑', description: '音量 +10%' },
+      { keys: '↓', description: '音量 -10%' },
     ],
   },
   {
     title: '导航',
     items: [
       { keys: '⌘ F', description: '聚焦搜索框' },
+      { keys: '⌘ /', description: '打开 / 关闭快捷键帮助' },
       { keys: 'Esc', description: '关闭歌词 → 退出设置 → 清空搜索' },
+    ],
+  },
+  {
+    title: '滑块（聚焦后）',
+    items: [
+      { keys: '← →', description: '进度 ±5 秒（⌘ ±10%）' },
+      { keys: '↑ ↓', description: '音量 ±10%' },
+      { keys: 'Home / End', description: '跳到开头 / 结尾（音量：满 / 静音）' },
+      { keys: 'M', description: '音量滑块：切换静音' },
     ],
   },
   {

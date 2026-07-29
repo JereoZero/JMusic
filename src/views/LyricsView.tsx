@@ -61,7 +61,9 @@ export default function LyricsView({ onClose }: LyricsViewProps) {
       if (lines.length === 0) return -1
       const timeMs = currentTime * 1000
       // 找最大的 i 使得 lines[i].time <= timeMs
-      let lo = 0, hi = lines.length - 1, result = -1
+      let lo = 0,
+        hi = lines.length - 1,
+        result = -1
       while (lo <= hi) {
         const mid = (lo + hi) >> 1
         if (lines[mid].time <= timeMs) {
@@ -189,7 +191,8 @@ export default function LyricsView({ onClose }: LyricsViewProps) {
         // clamp 到 [0, duration]，防止异常 LRC 时间戳 seek 到无效位置
         const rawTime = Number(timeStr) / 1000
         const maxTime = currentSong?.duration ?? 0
-        const clampedTime = maxTime > 0 ? Math.max(0, Math.min(maxTime, rawTime)) : Math.max(0, rawTime)
+        const clampedTime =
+          maxTime > 0 ? Math.max(0, Math.min(maxTime, rawTime)) : Math.max(0, rawTime)
         seek(clampedTime).catch(createErrorHandler('歌词跳转'))
         useOperationLogStore.getState().log('歌词跳转', `→ ${clampedTime.toFixed(1)}s`)
       }
@@ -203,27 +206,30 @@ export default function LyricsView({ onClose }: LyricsViewProps) {
 
   // 用户滚轮：临时手动浏览歌词（调整 manualOffset），6 秒后恢复自动跟随
   // 用 wheel 而非 onScroll：wheel 只在用户主动滚动时触发，程序 transform 不触发
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    const wasScrolling = isUserScrolling
-    setIsUserScrolling(true)
-    // 滚轮向下（deltaY > 0）→ 内容向上（manualOffset 减小）
-    manualOffsetRef.current -= e.deltaY
-    applyTransform('transform 0.1s ease-out')
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      const wasScrolling = isUserScrolling
+      setIsUserScrolling(true)
+      // 滚轮向下（deltaY > 0）→ 内容向上（manualOffset 减小）
+      manualOffsetRef.current -= e.deltaY
+      applyTransform('transform 0.1s ease-out')
 
-    if (scrollTimeoutRef.current) {
-      clearTimeout(scrollTimeoutRef.current)
-    }
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current)
+      }
 
-    scrollTimeoutRef.current = setTimeout(() => {
-      setIsUserScrolling(false)
-      useOperationLogStore.getState().log('歌词滚动', '恢复自动跟随', `lineIndex=${lineIndex}`)
-    }, 6000)
+      scrollTimeoutRef.current = setTimeout(() => {
+        setIsUserScrolling(false)
+        useOperationLogStore.getState().log('歌词滚动', '恢复自动跟随', `lineIndex=${lineIndex}`)
+      }, 6000)
 
-    // 仅在滚动开始时记录一次，避免日志爆炸
-    if (!wasScrolling) {
-      useOperationLogStore.getState().log('歌词滚动', '用户手动浏览', `lineIndex=${lineIndex}`)
-    }
-  }, [applyTransform, isUserScrolling, lineIndex])
+      // 仅在滚动开始时记录一次，避免日志爆炸
+      if (!wasScrolling) {
+        useOperationLogStore.getState().log('歌词滚动', '用户手动浏览', `lineIndex=${lineIndex}`)
+      }
+    },
+    [applyTransform, isUserScrolling, lineIndex]
+  )
 
   // 手动回到当前播放行：清除手动偏移，立即恢复自动跟随
   const handleResumeFollow = useCallback(() => {
@@ -284,11 +290,12 @@ export default function LyricsView({ onClose }: LyricsViewProps) {
 
       {/* 内容层 */}
       <div className="relative h-full w-full flex">
-        {/* 最左侧功能栏点击区域 - 退出歌词 */}
+        {/* 最左侧功能栏点击区域 - 退出歌词（仅鼠标手势，键盘用户使用右上角关闭按钮） */}
         <div
           className="absolute left-0 top-0 bottom-0 w-16 z-20 cursor-pointer"
           onClick={onClose}
           title="点击返回"
+          aria-hidden={true}
         />
 
         {/* 关闭按钮 */}
@@ -368,10 +375,7 @@ export default function LyricsView({ onClose }: LyricsViewProps) {
                 <p className="text-xs mt-2 text-zinc-700">可将 .lrc 歌词文件放在歌曲同目录下</p>
               </div>
             ) : (
-              <div
-                ref={contentRef}
-                className="py-32 text-center"
-              >
+              <div ref={contentRef} className="py-32 text-center">
                 {lyricLines.map((line, index) => {
                   const isCurrent = index === lineIndex
                   const isPast = index < lineIndex

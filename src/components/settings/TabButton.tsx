@@ -13,15 +13,9 @@ export function TabButton({ active, onClick, children, primaryColor }: TabButton
       onClick={onClick}
       className={cn(
         'px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200',
-        active
-          ? 'text-white'
-          : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'
+        active ? 'text-white' : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'
       )}
-      style={
-        active
-          ? { backgroundColor: primaryColor }
-          : undefined
-      }
+      style={active ? { backgroundColor: primaryColor } : undefined}
     >
       {children}
     </button>

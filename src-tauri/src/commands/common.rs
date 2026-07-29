@@ -39,7 +39,9 @@ pub struct ThumbnailInfo {
 pub async fn get_music_folder_and_targets(
     db: &crate::database::Database,
 ) -> Result<(String, Vec<PathBuf>), String> {
-    let music_folder = db.get_setting("music_folder").await
+    let music_folder = db
+        .get_setting("music_folder")
+        .await
         .map_err(|e| e.to_string())?
         .ok_or("Music folder not configured".to_string())?;
 
@@ -108,16 +110,14 @@ pub async fn get_or_create_thumbnail(
     match db.get_song_cover(path).await {
         Ok(Some(cover)) => {
             // 创建缩略图（CPU 密集：解码 + Lanczos3 缩放 + JPEG 编码 + 同步文件写入）
-            let thumbnail = tokio::task::spawn_blocking(move || {
-                match STANDARD.decode(&cover) {
-                    Ok(decoded) => {
-                        match crate::thumbnail::create_thumbnail(&decoded, &path_owned, size) {
-                            Ok(thumbnail) => Some(thumbnail),
-                            Err(_) => Some(cover),
-                        }
+            let thumbnail = tokio::task::spawn_blocking(move || match STANDARD.decode(&cover) {
+                Ok(decoded) => {
+                    match crate::thumbnail::create_thumbnail(&decoded, &path_owned, size) {
+                        Ok(thumbnail) => Some(thumbnail),
+                        Err(_) => Some(cover),
                     }
-                    Err(_) => Some(cover),
                 }
+                Err(_) => Some(cover),
             })
             .await
             .map_err(|e| e.to_string())?;
