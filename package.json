@@ -1,6 +1,6 @@
 {
   "name": "jlocal",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "本地音乐播放器 - Rust + Tauri 2",
   "type": "module",
   "scripts": {

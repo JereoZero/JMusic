@@ -2,6 +2,26 @@
 
 All notable changes to JlocalMusic will be documented in this file.
 
+## v0.9.1 (2026-07-29)
+
+### ⚡ 性能与稳定性优化
+
+- 删除冗余数据库路径索引，优化 `player.rs` 查询与 `get_duration` 实现
+- 配置 Vite `manualChunks` 拆分 vendor，Cargo `lto = "fat"` 优化产物体积
+
+### 🎵 播放器修复
+
+- 修复 `track_finished` 未重置 `backendLoaded` 导致播放完成后点击播放无声音
+- 合并「随机播放」与「单曲循环」为单一循环档位按钮（list → loop → shuffle）
+
+### 🎨 UI/UX 改进
+
+- 新增 5 档界面缩放（0.625× ~ 1.5×），适配不同分辨率/DPI 屏幕
+- 小档位优化可读性：安全字号锁定 + 自适应 padding + 虚拟列表行高同步
+- 为 `ProgressBar`/`VolumeControl` 补齐键盘交互与 ARIA 属性
+- 新增歌曲列表加载骨架屏、空状态动画、滑块悬停微交互、批量按钮触感
+- 修复 Sidebar「快捷键」按钮字号与图标对齐
+
 ## v0.9.0 (2026-06-27)
 
 ### 🎵 kira 音频引擎重构（Phase 1+2）
