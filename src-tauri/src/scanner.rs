@@ -42,12 +42,13 @@ impl FolderScanner {
     }
 
     /// 扫描文件夹，提取音频元数据
-    /// existing_mtimes: DB 中已存储的 {path: file_mtime}，mtime 匹配的文件跳过元数据提取
+    /// existing_mtimes: DB 中已存储的 {path: (file_mtime, file_size)}，
+    ///                  两者均未变的文件跳过元数据提取
     /// app_handle: 用于向前端 emit 扫描进度事件（scan_progress / scan_complete / scan_error）
     pub async fn scan(
         &self,
         folder_path: &str,
-        existing_mtimes: &HashMap<String, i64>,
+        existing_mtimes: &HashMap<String, (i64, Option<i64>)>,
         app_handle: AppHandle,
     ) -> anyhow::Result<ScanResult> {
         let folder_path = folder_path.to_string();
@@ -62,7 +63,7 @@ impl FolderScanner {
 
     fn scan_blocking(
         folder_path: &str,
-        existing_mtimes: &HashMap<String, i64>,
+        existing_mtimes: &HashMap<String, (i64, Option<i64>)>,
         app_handle: &AppHandle,
     ) -> anyhow::Result<ScanResult> {
         let scan_path = Path::new(folder_path);
@@ -74,8 +75,8 @@ impl FolderScanner {
         }
         info!("Starting folder scan: {}", folder_path);
 
-        // 阶段 1：WalkDir 遍历收集候选文件路径 + mtime（IO 密集，单线程足够）
-        let mut supported_files: Vec<(PathBuf, i64)> = Vec::with_capacity(500);
+        // 阶段 1：WalkDir 遍历收集候选文件路径 + mtime + size（IO 密集，单线程足够）
+        let mut supported_files: Vec<(PathBuf, i64, Option<i64>)> = Vec::with_capacity(500);
         let mut encrypted_files: Vec<(PathBuf, String)> = Vec::with_capacity(50);
         let mut visited: HashSet<PathBuf> = HashSet::new();
         let mut scanned = 0usize;
@@ -135,24 +136,33 @@ impl FolderScanner {
                     is_ncm_file(path) || is_qmc_file(path) || is_encrypted_extension(&ext_lower);
 
                 if is_supported {
-                    // 获取文件 mtime 用于增量扫描判断（毫秒精度，避免同秒内修改被漏判）
+                    // 获取文件 mtime + size 用于增量扫描判断
+                    // （毫秒精度，避免同秒内修改被漏判）
                     let path_str = path.to_string_lossy().to_string();
-                    let mtime = std::fs::metadata(path)
-                        .ok()
+                    let metadata = std::fs::metadata(path).ok();
+                    let mtime = metadata
+                        .as_ref()
                         .and_then(|m| m.modified().ok())
                         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
+                    let size = metadata.as_ref().map(|m| m.len() as i64);
 
-                    // 增量扫描：mtime 匹配则跳过（文件未变更，DB 中已有最新元数据）
-                    if let Some(&existing_mtime) = existing_mtimes.get(&path_str) {
-                        if existing_mtime == mtime {
+                    // 增量扫描：mtime 与 size 均未变才跳过。
+                    // 仅比 mtime 会漏判「内容变但 mtime 不变」的情况——cp -p / rsync -t /
+                    // 恢复备份都会保留原 mtime，导致 DB 元数据永久陈旧。
+                    // size 为 None（历史记录尚未回填）时保守重扫一次。
+                    if let Some(&(existing_mtime, existing_size)) = existing_mtimes.get(&path_str) {
+                        if existing_mtime == mtime
+                            && existing_size.is_some()
+                            && existing_size == size
+                        {
                             skipped += 1;
                             continue;
                         }
                     }
 
-                    supported_files.push((path.to_path_buf(), mtime));
+                    supported_files.push((path.to_path_buf(), mtime, size));
                 } else if is_encrypted || Self::is_unsupported_format(&ext_lower) {
                     encrypted_files.push((path.to_path_buf(), ext_lower));
                 }
@@ -185,8 +195,8 @@ impl FolderScanner {
         let processed = AtomicUsize::new(0);
         let results: Vec<Result<Song, String>> = supported_files
             .par_iter()
-            .map(|(path, mtime)| {
-                let r = Self::process_normal_file(path, *mtime);
+            .map(|(path, mtime, size)| {
+                let r = Self::process_normal_file(path, *mtime, *size);
                 let done = processed.fetch_add(1, Ordering::Relaxed) + 1;
                 if done.is_multiple_of(METADATA_EMIT_INTERVAL) || done == total {
                     let _ = app_handle.emit(
@@ -243,7 +253,7 @@ impl FolderScanner {
     }
 
     /// 处理单个正常音频文件，返回 Song 或错误消息
-    fn process_normal_file(path: &Path, file_mtime: i64) -> Result<Song, String> {
+    fn process_normal_file(path: &Path, file_mtime: i64, file_size: Option<i64>) -> Result<Song, String> {
         let path_str = path.to_string_lossy().to_string();
 
         let metadata = match MetadataExtractor::extract_blocking(&path_str) {
@@ -285,6 +295,7 @@ impl FolderScanner {
             created_at: Utc::now(),
             is_liked: None,
             file_mtime: Some(file_mtime),
+            file_size,
         })
     }
 
@@ -385,11 +396,13 @@ impl FolderScanner {
             _ => "不支持",
         };
 
-        let file_mtime = std::fs::metadata(path)
-            .ok()
+        let metadata = std::fs::metadata(path).ok();
+        let file_mtime = metadata
+            .as_ref()
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as i64);
+        let file_size = metadata.as_ref().map(|m| m.len() as i64);
 
         let song = Song {
             id: Uuid::new_v4().to_string(),
@@ -403,6 +416,7 @@ impl FolderScanner {
             created_at: Utc::now(),
             is_liked: None,
             file_mtime,
+            file_size,
         };
 
         Some(song)

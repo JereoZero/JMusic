@@ -47,6 +47,12 @@ pub struct Song {
     #[serde(skip)]
     #[sqlx(default)]
     pub file_mtime: Option<i64>,
+    /// 源文件大小（字节），与 file_mtime 配合做增量扫描：
+    /// mtime 相同但 size 不同也判定为文件已变（覆盖 cp -p / rsync -t / 恢复备份）。
+    /// 不序列化到前端。
+    #[serde(skip)]
+    #[sqlx(default)]
+    pub file_size: Option<i64>,
 }
 
 /// 数据库错误类型
@@ -267,7 +273,7 @@ impl Database {
             let mut tx = self.pool.begin().await?;
 
             let mut query_builder = sqlx::QueryBuilder::new(
-                "INSERT INTO songs (id, title, artist, album, duration, path, cover, file_mtime) ",
+                "INSERT INTO songs (id, title, artist, album, duration, path, cover, file_mtime, file_size) ",
             );
             query_builder.push_values(chunk, |mut b, song| {
                 b.push_bind(&song.id)
@@ -277,7 +283,8 @@ impl Database {
                     .push_bind(song.duration)
                     .push_bind(&song.path)
                     .push_bind(&song.cover)
-                    .push_bind(song.file_mtime);
+                    .push_bind(song.file_mtime)
+                    .push_bind(song.file_size);
             });
             query_builder.push(
                 " ON CONFLICT(path) DO UPDATE SET \
@@ -286,7 +293,8 @@ impl Database {
                  album = excluded.album, \
                  duration = excluded.duration, \
                  cover = COALESCE(excluded.cover, songs.cover), \
-                 file_mtime = COALESCE(excluded.file_mtime, songs.file_mtime)",
+                 file_mtime = COALESCE(excluded.file_mtime, songs.file_mtime), \
+                 file_size = COALESCE(excluded.file_size, songs.file_size)",
             );
 
             match query_builder.build().execute(&mut *tx).await {
@@ -305,15 +313,16 @@ impl Database {
                     }
                     for song in chunk {
                         match sqlx::query(
-                            r#"INSERT INTO songs (id, title, artist, album, duration, path, cover, file_mtime)
-                            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                            r#"INSERT INTO songs (id, title, artist, album, duration, path, cover, file_mtime, file_size)
+                            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                             ON CONFLICT(path) DO UPDATE SET
                                 title = excluded.title,
                                 artist = excluded.artist,
                                 album = excluded.album,
                                 duration = excluded.duration,
                                 cover = COALESCE(excluded.cover, songs.cover),
-                                file_mtime = COALESCE(excluded.file_mtime, songs.file_mtime)"#,
+                                file_mtime = COALESCE(excluded.file_mtime, songs.file_mtime),
+                                file_size = COALESCE(excluded.file_size, songs.file_size)"#,
                         )
                         .bind(&song.id)
                         .bind(&song.title)
@@ -323,6 +332,7 @@ impl Database {
                         .bind(&song.path)
                         .bind(&song.cover)
                         .bind(song.file_mtime)
+                        .bind(song.file_size)
                         .execute(&self.pool)
                         .await
                         {
@@ -345,19 +355,22 @@ impl Database {
         Ok((count, errors))
     }
 
-    /// 获取所有歌曲的 file_mtime，用于增量扫描
+    /// 获取所有歌曲的 file_mtime 与 file_size，用于增量扫描。
+    ///
+    /// 返回 `path -> (mtime, size)`；两者都参与「文件是否变更」的判定：
+    /// 仅比 mtime 会在 cp -p / rsync -t / 恢复备份等「内容变但 mtime 不变」的场景漏判。
     pub async fn get_all_song_mtimes(
         &self,
-    ) -> Result<std::collections::HashMap<String, i64>, DatabaseError> {
-        let rows = sqlx::query_as::<_, (String, Option<i64>)>(
-            "SELECT path, file_mtime FROM songs WHERE file_mtime IS NOT NULL",
+    ) -> Result<std::collections::HashMap<String, (i64, Option<i64>)>, DatabaseError> {
+        let rows = sqlx::query_as::<_, (String, Option<i64>, Option<i64>)>(
+            "SELECT path, file_mtime, file_size FROM songs WHERE file_mtime IS NOT NULL",
         )
         .fetch_all(&self.pool)
         .await?;
 
         let map = rows
             .into_iter()
-            .filter_map(|(path, mtime)| mtime.map(|m| (path, m)))
+            .filter_map(|(path, mtime, size)| mtime.map(|m| (path, (m, size))))
             .collect();
         Ok(map)
     }
@@ -1078,6 +1091,7 @@ mod tests {
             created_at: Utc::now(),
             is_liked: None,
             file_mtime: None,
+            file_size: None,
         }
     }
 
