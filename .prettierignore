@@ -3,3 +3,8 @@ node_modules/
 src-tauri/
 *.md
 coverage/
+
+# ts-rs 自动生成（scripts/generate-types.sh 直接 cp 原始输出）。
+# 不能格式化：CI 的 "Verify generated types are in sync" 要求提交内容与
+# ts-rs 原始输出逐字节一致，若在此格式化则每次 gen:types 都会判定不同步。
+src/types/generated/
