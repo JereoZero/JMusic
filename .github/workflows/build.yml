@@ -43,6 +43,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm install --legacy-peer-deps
 
+      # 必须先产出 dist/：tauri::generate_context!() 在编译期校验
+      # tauri.conf.json 的 frontendDist("../dist") 是否存在，缺失会让
+      # `cargo test`（gen:types / Rust check / Rust tests 都走它）直接 panic。
+      # 直接调 vite 而非 `npm run build`，避免触发 prebuild → gen:types 的循环依赖。
+      - name: Build frontend (produces dist/)
+        run: npx vite build
+
       - name: Generate TypeScript types (ts-rs)
         run: npm run gen:types
 
