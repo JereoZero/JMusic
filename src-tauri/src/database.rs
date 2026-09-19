@@ -10,6 +10,24 @@ use tauri::AppHandle;
 use tracing::{debug, error, info, warn};
 use ts_rs::TS;
 
+/// 判断一个「文件不存在」的路径是否可以**确定**为已被删除，从而安全地清理其 DB 记录。
+///
+/// 仅当文件缺失且其**父目录仍然存在**时才返回 `true`。
+///
+/// 为什么需要这个判断：外接盘/网络盘未挂载、或二级文件夹的符号链接目标临时
+/// 不可达时，该区域下**所有**歌曲的 `Path::exists()` 都会返回 `false`。若据此
+/// 清理，会把整盘歌曲连同 `liked_songs` / `play_counts` / `play_history`
+/// （经 FK ON DELETE CASCADE）一并永久删除，而源文件其实并未删除——属于不可恢复
+/// 的数据丢失。父目录也缺失时说明整片区域不可判定，一律跳过。
+fn is_path_confirmably_deleted(path: &str) -> bool {
+    match std::path::Path::new(path).parent() {
+        // 父目录存在 → 该文件确实从存在的目录中消失了，可安全清理
+        Some(parent) => parent.exists(),
+        // 无父目录（如路径异常）→ 无法判定，保守跳过
+        None => false,
+    }
+}
+
 /// 歌曲数据结构
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, TS)]
 #[ts(export)]
@@ -498,6 +516,12 @@ impl Database {
     /// 清理不存在的歌曲 - 分批处理，只查path避免全量加载
     /// 利用 FK ON DELETE CASCADE：删除 songs 时自动清理 play_counts/play_history/liked_songs；
     /// hidden_songs 无 FK 级联，需显式批量删除。
+    ///
+    /// ⚠️ 数据安全护栏：仅删除「父目录仍存在」的缺失文件。
+    /// 若某缺失路径的父目录也不存在（如外接盘未挂载、二级文件夹符号链接目标
+    /// 临时不可达），说明整片区域处于临时不可判定状态，此时 `!exists()` 是因为
+    /// 挂载点消失而非文件真正被删除。直接删除会级联清掉整盘歌曲的喜欢/播放历史/
+    /// 播放次数，且文件既未真正删、记录不可恢复。故一律跳过，待下次可达时再判定。
     pub async fn cleanup_nonexistent_songs(&self) -> Result<usize, DatabaseError> {
         let paths: Vec<String> = sqlx::query_scalar("SELECT path FROM songs")
             .fetch_all(&self.pool)
@@ -508,6 +532,7 @@ impl Database {
             paths
                 .into_par_iter()
                 .filter(|path| !std::path::Path::new(path).exists())
+                .filter(|path| is_path_confirmably_deleted(path))
                 .collect()
         })
         .await
@@ -585,6 +610,9 @@ impl Database {
             paths
                 .into_par_iter()
                 .filter(|path| !std::path::Path::new(path).exists())
+                // 同一数据安全护栏：仅清理父目录仍存在的缺失文件，
+                // 避免外接盘/符号链接目标临时不可达时误删整片记录
+                .filter(|path| is_path_confirmably_deleted(path))
                 .collect()
         })
         .await
@@ -1263,5 +1291,80 @@ mod tests {
         assert_eq!(removed, 2);
         let liked = db.get_liked_songs().await.unwrap();
         assert!(liked.is_empty());
+    }
+
+    // ===== cleanup_nonexistent_songs 数据安全护栏 =====
+
+    #[tokio::test]
+    async fn test_cleanup_removes_song_whose_parent_dir_still_exists() {
+        // 父目录仍在、文件被删 → 属于真实删除，应清理
+        let (db, tmp) = setup_db().await;
+        let album = tmp.path().join("album");
+        std::fs::create_dir_all(&album).unwrap();
+        let song_path = album.join("gone.mp3");
+        std::fs::write(&song_path, b"fake").unwrap();
+
+        db.upsert_songs(vec![make_song(&song_path.to_string_lossy(), "Gone")])
+            .await
+            .unwrap();
+        db.toggle_like(&song_path.to_string_lossy(), true)
+            .await
+            .unwrap();
+
+        // 删除文件，保留父目录
+        std::fs::remove_file(&song_path).unwrap();
+
+        let removed = db.cleanup_nonexistent_songs().await.unwrap();
+        assert_eq!(removed, 1, "父目录存在时缺失文件应被清理");
+        assert!(db.get_songs().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_keeps_songs_when_whole_tree_unreachable() {
+        // 父目录也不存在（外接盘未挂载 / 二级文件夹符号链接目标消失）→ 不可判定，
+        // 必须保留记录，否则会级联删掉 liked_songs 等用户数据且不可恢复
+        let (db, tmp) = setup_db().await;
+        let unmounted = tmp.path().join("not-mounted-drive").join("album");
+        let song_path = unmounted.join("song.mp3");
+
+        db.upsert_songs(vec![make_song(&song_path.to_string_lossy(), "OnUnmountedDrive")])
+            .await
+            .unwrap();
+        db.toggle_like(&song_path.to_string_lossy(), true)
+            .await
+            .unwrap();
+        db.increment_play_count(&song_path.to_string_lossy())
+            .await
+            .unwrap();
+
+        // 整个挂载点都不存在
+        let removed = db.cleanup_nonexistent_songs().await.unwrap();
+
+        assert_eq!(removed, 0, "整片区域不可达时不得清理");
+        assert_eq!(db.get_songs().await.unwrap().len(), 1, "歌曲记录应保留");
+        assert!(
+            !db.get_liked_songs().await.unwrap().is_empty(),
+            "喜欢记录不得被级联删除"
+        );
+        assert!(
+            !db.get_play_counts().await.unwrap().is_empty(),
+            "播放次数不得被级联删除"
+        );
+    }
+
+    #[test]
+    fn test_is_path_confirmably_deleted() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("exists");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 父目录存在 + 文件不存在 → 可判定为已删除
+        assert!(is_path_confirmably_deleted(
+            &dir.join("missing.mp3").to_string_lossy()
+        ));
+        // 父目录也不存在 → 不可判定
+        assert!(!is_path_confirmably_deleted(
+            &tmp.path().join("no-such-dir").join("a.mp3").to_string_lossy()
+        ));
     }
 }
