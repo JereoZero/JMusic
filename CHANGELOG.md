@@ -2,6 +2,36 @@
 
 All notable changes to JlocalMusic will be documented in this file.
 
+## v0.9.4 (2026-09-20)
+
+> 承接 v0.9.3 的构建链修复：Release 首次能产出产物后，继续修复审计发现的扫描/歌词/元数据/缓存问题。
+
+### 🔒 数据安全
+
+- 修复**外接盘未挂载时清理逻辑级联删除用户数据（不可恢复）** — `cleanup_nonexistent_songs()` 遍历全表删除所有 `!Path::exists()` 的记录，而 `songs` 删除经 FK `ON DELETE CASCADE` 连带删掉 `liked_songs` / `play_counts` / `play_history`。当音乐文件夹所在外接盘/网络盘未挂载、或二级文件夹符号链接目标临时不可达时，该区域所有歌曲 `exists()` 均为 `false` → 整盘记录连同喜欢、播放历史、播放次数被**永久删除**，而源文件其实并未删除。新增 `is_path_confirmably_deleted()`：仅当「文件缺失且**父目录仍存在**」才判定为真实删除；父目录也缺失说明整片区域不可判定（挂载点消失），一律跳过。两个 cleanup 函数均加此护栏，+3 个回归测试
+
+### 🐛 扫描正确性
+
+- 修复**增量扫描仅比对 mtime，内容变更被永久漏判** — `cp -p` / `rsync -t` / 恢复备份 / 同毫秒内修改等「内容变但 mtime 不变」的场景会被永久判定为未变更，导致 DB 中标题/时长/封面长期陈旧且无自动纠正路径。`songs` 表新增 `file_size` 列，扫描同时采集 mtime + size，**两者均未变才跳过**；`size` 为 `None`（历史记录未回填）时保守重扫一次
+- 修复**隐藏目录作为扫描根会被整体过滤** — `walkdir` 的 `filter_entry` 对 depth 0 的根条目同样生效：音乐文件夹名为 `.music` 之类的隐藏目录时会被整体 `skip_current_dir` 过滤，扫描**静默返回 0 首且无任何提示**。修复：depth 0 无条件放行
+- 修复**非 UTF-8 文件名入库后必然播放失败** — `to_string_lossy` 会把非法字节替换为 U+FFFD，写进 DB(TEXT) 后该路径再也无法打开原文件（歌曲出现在列表里却永远播放失败）。两条分支（正常/不支持格式）均改用 `to_str()`，非法路径跳过并记日志，不写入必然失效的记录
+
+### 🎵 歌词
+
+- 修复 **`.lrc` 符号链接越权读取** — `get_lyrics` 只校验了**音频**路径，而 `.lrc` 由音频路径派生（`with_extension("lrc")`）后直接 `fs::read`：同目录下名为 `xxx.lrc` 的符号链接可指向音乐文件夹外任意文件被当歌词读取。`load_lrc_file` 现在对每个候选 `.lrc` 复用 `resolve_path_in_music_folder` 做边界校验（顺带消除 TOCTOU）
+- 修复 **UTF-8 歌词被误判致整篇乱码** — `decode_lrc_content` 丢弃 chardetng 的置信度、无条件采信探测结果；chardetng 对短文本/中英混排易误判，本来合法的 UTF-8 歌词会被按其他编码解码成乱码且无纠正路径。改为去 BOM 后先走严格 UTF-8 快速路径，仅非 UTF-8（GBK/BIG5/Shift-JIS）才交给 chardetng
+- 顺带修正：`.lrc` 存在但内容为空时，不再跳过 `.LRC` 候选
+
+### 🖼️ 资源占用
+
+- 修复**嵌入封面无大小上限** — 封面 base64 后（膨胀 ~33%）存入 SQLite 并经 IPC 传输，而 APIC 帧大小不受限：损坏或刻意构造的音频可携带数百 MB 封面，导致内存/DB/IPC 一起膨胀。新增 5 MB 上限，超限丢弃封面（不影响其余元数据），+3 个边界测试
+- 修复**缩略图孤儿缓存持续增长** — 缩略图文件名为 `{md5(源路径)}_{mtime}_{size}.jpg`，只在「同一首歌重新生成」时清理其旧文件；歌曲被移出曲库（删除记录、更换音乐文件夹）后没有任何清理路径，缓存随每次库变更持续累积。新增 `cleanup_orphan_thumbnails()`，在扫描结束后回收 md5 前缀不在当前曲库的文件
+
+### 🧪 测试
+
+- 后端 **72 → 75 个测试**（数据护栏 3 + 封面上限 3），前端 155 个
+- CI 全绿（`ci` job 含 `cargo check --all-targets` + `cargo test`）
+
 ## v0.9.3 (2026-09-19)
 
 > 说明：v0.9.2 的 tag 曾指向一个 CI 故障的 commit，其 release 从未产出（build job 因 `needs: ci` 被跳过）。
