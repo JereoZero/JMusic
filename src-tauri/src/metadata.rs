@@ -69,16 +69,65 @@ impl MetadataExtractor {
     fn extract_cover(tagged_file: &lofty::file::TaggedFile) -> Option<String> {
         if let Some(tag) = tagged_file.primary_tag() {
             if let Some(picture) = tag.pictures().first() {
-                return Some(general_purpose::STANDARD.encode(picture.data()));
+                return encode_cover(picture.data());
             }
         }
 
         for tag in tagged_file.tags() {
             if let Some(picture) = tag.pictures().first() {
-                return Some(general_purpose::STANDARD.encode(picture.data()));
+                return encode_cover(picture.data());
             }
         }
 
         None
+    }
+}
+
+/// 单张嵌入封面允许的最大解码后字节数（5 MB）。
+///
+/// 封面随后会被 base64 编码（膨胀 ~33%）存入 SQLite 并经 IPC 传输到前端。
+/// 不设上限时，损坏或刻意构造的音频源可携带数百 MB 的 APIC 帧，导致内存/IPC/DB
+/// 一起膨胀甚至拖垮应用。超限的封面直接丢弃（返回 None），不影响其余元数据。
+const MAX_EMBEDDED_COVER_BYTES: usize = 5 * 1024 * 1024;
+
+fn encode_cover(data: &[u8]) -> Option<String> {
+    if data.len() > MAX_EMBEDDED_COVER_BYTES {
+        tracing::debug!(
+            "Skipping embedded cover: {} bytes exceeds limit {}",
+            data.len(),
+            MAX_EMBEDDED_COVER_BYTES
+        );
+        return None;
+    }
+    Some(general_purpose::STANDARD.encode(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_cover_accepts_normal_size() {
+        let data = vec![0u8; 1024];
+        let encoded = encode_cover(&data).expect("正常尺寸封面应被编码");
+        assert_eq!(
+            general_purpose::STANDARD.decode(encoded).unwrap(),
+            data,
+            "编码结果应可还原"
+        );
+    }
+
+    #[test]
+    fn encode_cover_rejects_oversized() {
+        // 超出上限的封面必须丢弃，避免 base64 后膨胀内存/DB/IPC
+        let data = vec![0u8; MAX_EMBEDDED_COVER_BYTES + 1];
+        assert!(encode_cover(&data).is_none());
+    }
+
+    #[test]
+    fn encode_cover_accepts_exact_limit() {
+        // 边界：恰好等于上限应放行（判断用 > 而非 >=）
+        let data = vec![0u8; MAX_EMBEDDED_COVER_BYTES];
+        assert!(encode_cover(&data).is_some());
     }
 }

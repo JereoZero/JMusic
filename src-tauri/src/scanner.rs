@@ -89,6 +89,12 @@ impl FolderScanner {
             .max_depth(50)
             .into_iter()
             .filter_entry(|e| {
+                // depth 0 是扫描根自身，必须无条件放行：
+                // filter_entry 对根条目同样生效，若音乐文件夹名为 `.music` 之类的
+                // 隐藏目录，会被整体 skip_current_dir 过滤掉，扫描静默返回 0 首且无提示。
+                if e.depth() == 0 {
+                    return true;
+                }
                 let name = e.file_name();
                 !name.to_string_lossy().starts_with('.') && name != "@eaDir"
             })
@@ -136,9 +142,18 @@ impl FolderScanner {
                     is_ncm_file(path) || is_qmc_file(path) || is_encrypted_extension(&ext_lower);
 
                 if is_supported {
+                    // 路径必须以合法 UTF-8 入库：DB 的 path 列是 TEXT、IPC 也是 UTF-8，
+                    // 而 to_string_lossy 会把非法字节替换成 U+FFFD，得到的路径再也无法
+                    // 打开该文件（歌曲会显示在列表里却永远播放失败）。
+                    // macOS 的 APFS/HFS+ 强制 UTF-8，主要影响 exFAT/SMB 挂载点，
+                    // 此时宁可跳过并记录日志，也不写入必然失效的记录。
+                    let Some(path_str) = path.to_str().map(str::to_string) else {
+                        warn!("Skipping file with non-UTF-8 path: {:?}", path);
+                        continue;
+                    };
+
                     // 获取文件 mtime + size 用于增量扫描判断
                     // （毫秒精度，避免同秒内修改被漏判）
-                    let path_str = path.to_string_lossy().to_string();
                     let metadata = std::fs::metadata(path).ok();
                     let mtime = metadata
                         .as_ref()
@@ -373,7 +388,8 @@ impl FolderScanner {
     }
 
     fn process_unsupported_file(path: &Path, ext: &str, _is_encrypted: bool) -> Option<Song> {
-        let path_str = path.to_string_lossy().to_string();
+        // 非 UTF-8 路径无法在 DB(TEXT)/IPC(UTF-8) 中正确往返，跳过而非写入 U+FFFD 占位路径
+        let path_str = path.to_str()?.to_string();
 
         let filename = path
             .file_stem()
