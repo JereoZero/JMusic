@@ -177,6 +177,63 @@ pub fn get_or_create_thumbnail(
     create_thumbnail(cover_data, song_path, size)
 }
 
+/// 清理孤儿缩略图：删除文件名前缀（源路径 md5）不属于 `valid_paths` 的缓存文件。
+///
+/// 缩略图文件名形如 `{md5(源路径)}_{mtime}_{size}.jpg`，只在「同一首歌重新生成」
+/// 时才会清理其旧文件；歌曲被移出曲库（删除记录、更换音乐文件夹）后没有任何清理
+/// 路径，缓存会持续累积占用磁盘。这里在扫描结束后统一回收。
+///
+/// 安全性：`valid_paths` 应传入当前库中的全部歌曲路径。传空切片会跳过清理，
+/// 避免因调用方取数失败而误删整个缓存。
+///
+/// 返回删除的文件数。
+pub fn cleanup_orphan_thumbnails(valid_paths: &[String]) -> usize {
+    if valid_paths.is_empty() {
+        return 0;
+    }
+
+    let thumbnails_dir = match get_thumbnails_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("cleanup_orphan_thumbnails: {}", e);
+            return 0;
+        }
+    };
+
+    let valid_hashes: std::collections::HashSet<String> =
+        valid_paths.iter().map(|p| path_to_hash(p)).collect();
+
+    let entries = match fs::read_dir(&thumbnails_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("cleanup_orphan_thumbnails: {}", e);
+            return 0;
+        }
+    };
+
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        // 前缀即源路径的 md5（32 位十六进制），下划线分隔
+        let Some(hash) = name.split('_').next() else {
+            continue;
+        };
+        if hash.len() != 32 || valid_hashes.contains(hash) {
+            continue;
+        }
+        if let Err(e) = fs::remove_file(entry.path()) {
+            tracing::debug!("Failed to remove orphan thumbnail {:?}: {}", entry.path(), e);
+        } else {
+            removed += 1;
+        }
+    }
+
+    if removed > 0 {
+        tracing::info!("Removed {} orphan thumbnail(s)", removed);
+    }
+    removed
+}
+
 pub fn get_thumbnails_count() -> (usize, usize) {
     let thumbnails_dir = match get_thumbnails_dir() {
         Ok(d) => d,

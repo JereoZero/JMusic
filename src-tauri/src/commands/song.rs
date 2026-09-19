@@ -496,6 +496,23 @@ pub async fn scan_folder(
                 }
             }
 
+            // 扫描后回收孤儿缩略图：歌曲被移出曲库（删除记录 / 更换音乐文件夹）后，
+            // 其缩略图缓存没有任何清理路径，会随每次库变更持续累积占用磁盘。
+            // 取数失败时跳过，避免误删整个缓存（cleanup 内部对空列表也会跳过）。
+            match db.get_all_song_mtimes().await {
+                Ok(mtimes) => {
+                    let valid_paths: Vec<String> = mtimes.into_keys().collect();
+                    if let Err(e) = tokio::task::spawn_blocking(move || {
+                        crate::thumbnail::cleanup_orphan_thumbnails(&valid_paths)
+                    })
+                    .await
+                    {
+                        tracing::warn!("Orphan thumbnail cleanup task failed: {}", e);
+                    }
+                }
+                Err(e) => tracing::warn!("Skipping orphan thumbnail cleanup: {}", e),
+            }
+
             Ok(ApiResponse::ok(result))
         }
         Err(e) => Ok(ApiResponse::err(e.to_string())),
