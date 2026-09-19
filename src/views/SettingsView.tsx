@@ -709,7 +709,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                               className="mx-auto mb-1.5 flex items-center justify-center font-bold text-white"
                               style={{
                                 color: isSelected ? primaryColor : undefined,
-                                fontSize: `${Math.round(16 * cfg.factor)}px`,
+                                fontSize: `${Math.round(16 * cfg.zoom)}px`,
                               }}
                             >
                               A

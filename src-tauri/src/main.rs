@@ -91,39 +91,15 @@ fn main() {
 
             // 自动扫描默认音乐文件夹
             tauri::async_runtime::spawn(async move {
-                // 从设置中读取音乐文件夹，如果没有则使用默认的 jmusic-file 文件夹
-                let music_folder: String = match db.get_setting("music_folder").await {
-                    Ok(Some(folder)) if !folder.is_empty() => folder,
-                    _ => {
-                        match crate::paths::get_app_data_dir(&app_handle) {
-                            Ok(data_dir) => {
-                                let music_dir = data_dir.join("jmusic-file");
-                                let folder = music_dir.to_string_lossy().to_string();
-                                // 在 spawn_blocking 中执行同步 fs 操作，避免阻塞 tokio 运行时
-                                let music_dir_clone = music_dir.clone();
-                                if let Err(e) = tokio::task::spawn_blocking(move || {
-                                    std::fs::create_dir_all(&music_dir_clone)
-                                })
-                                .await
-                                {
-                                    error!("Failed to create music directory task: {}", e);
-                                }
-                                if let Err(e) = tokio::fs::metadata(&music_dir).await {
-                                    error!(
-                                        "Failed to create music directory '{}': {}",
-                                        music_dir.display(),
-                                        e
-                                    );
-                                }
-                                if let Err(e) = db.set_setting("music_folder", &folder).await {
-                                    error!("Failed to persist default music_folder setting: {}", e);
-                                }
-                                folder
-                            }
-                            Err(_) => String::new(),
+                // 音乐文件夹唯一真源：DB 设置 `music_folder`，缺失时回退默认目录并写回 DB
+                let music_folder: String =
+                    match crate::paths::resolve_music_folder(&app_handle, &db).await {
+                        Ok(folder) => folder.to_string_lossy().to_string(),
+                        Err(e) => {
+                            error!("Failed to resolve music folder: {}", e);
+                            return;
                         }
-                    }
-                };
+                    };
 
                 if music_folder.is_empty() {
                     info!("No music folder configured");

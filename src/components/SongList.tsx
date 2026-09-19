@@ -11,7 +11,7 @@ import SongItem from './SongItem'
 import { usePlayQueueStore } from '../stores/playQueueStore'
 import { useThemeStore } from '../stores/themeStore'
 import { THEMES } from '../config/themes'
-import { useUiStore, UI_SCALE_CONFIG } from '../stores/uiStore'
+import { useUiStore } from '../stores/uiStore'
 
 // 批量操作工具栏按钮统一样式：hover 反馈 + 按下触感
 const BATCH_BTN_CLASS =
@@ -151,9 +151,9 @@ export default function SongList({
   const primaryColor = useThemeStore((s) => THEMES[s.currentThemeId].primary)
   const addToQueue = usePlayQueueStore((s) => s.addBatchToQueue)
 
-  // 界面缩放：行高跟随 factor，保证虚拟列表 px 坐标系与缩放后内容一致
+  // 界面缩放走 webview 原生缩放：CSS px 坐标系不变，行高保持常量即可（无需再乘 factor）
   const uiScale = useUiStore((s) => s.scale)
-  const songItemHeight = Math.round(APP_CONFIG.ui.songItemHeight * UI_SCALE_CONFIG[uiScale].factor)
+  const songItemHeight = APP_CONFIG.ui.songItemHeight
 
   const columnConfig = useMemo<SongListColumnConfig>(
     () => ({ showLike: showLikeButton, showHide: showHiddenButton }),

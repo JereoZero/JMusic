@@ -198,14 +198,20 @@ impl Database {
     }
 
     /// 切换喜欢状态
+    ///
+    /// liked_songs.path 有外键指向 songs(path)（ON DELETE CASCADE），
+    /// 且连接启用了 `foreign_keys(true)`。直接 INSERT 一个不在 songs 中的路径
+    /// 会抛 `FOREIGN KEY constraint failed`。因此用 EXISTS 子查询把「歌曲必须已入库」
+    /// 这一条件交给 SQL 原子处理：未入库时插入 0 行（静默忽略）而非报错。
     pub async fn toggle_like(&self, path: &str, liked: bool) -> Result<(), DatabaseError> {
         if liked {
             sqlx::query(
                 r#"
-                INSERT OR IGNORE INTO liked_songs (path) 
-                VALUES (?)
+                INSERT OR IGNORE INTO liked_songs (path)
+                SELECT ? WHERE EXISTS (SELECT 1 FROM songs WHERE path = ?)
                 "#,
             )
+            .bind(path)
             .bind(path)
             .execute(&self.pool)
             .await?;
@@ -339,6 +345,11 @@ impl Database {
     }
 
     /// 增加播放次数
+    ///
+    /// play_counts.path 有外键指向 songs(path)（ON DELETE CASCADE），
+    /// 播放未入库文件时直接 INSERT 会抛 `FOREIGN KEY constraint failed`，
+    /// 使整个事务回滚、播放次数静默丢失。用 EXISTS 子查询守卫，
+    /// 未入库时跳过 play_counts 写入（songs 的 UPDATE 本身也是 0 行）。
     pub async fn increment_play_count(&self, path: &str) -> Result<(), DatabaseError> {
         let mut tx = self.pool.begin().await?;
 
@@ -349,13 +360,15 @@ impl Database {
 
         sqlx::query(
             r#"
-            INSERT INTO play_counts (path, count, last_played) 
-            VALUES (?1, 1, CURRENT_TIMESTAMP)
+            INSERT INTO play_counts (path, count, last_played)
+            SELECT ?, 1, CURRENT_TIMESTAMP
+            WHERE EXISTS (SELECT 1 FROM songs WHERE path = ?)
             ON CONFLICT(path) DO UPDATE SET 
                 count = count + 1,
                 last_played = CURRENT_TIMESTAMP
             "#,
         )
+        .bind(path)
         .bind(path)
         .execute(&mut *tx)
         .await?;
@@ -365,18 +378,30 @@ impl Database {
     }
 
     /// 记录完整的播放历史
+    ///
+    /// play_history.path 有外键指向 songs(path)（ON DELETE CASCADE），
+    /// 播放未入库文件时直接 INSERT 会抛 `FOREIGN KEY constraint failed`。
+    /// 用 EXISTS 子查询守卫：未入库时插入 0 行（历史记录本就通过 JOIN songs 展示，
+    /// 不存在于 songs 的记录也查不出来）。
     pub async fn add_play_history(
         &self,
         path: &str,
         duration: i64,
         completed: bool,
     ) -> Result<(), DatabaseError> {
-        sqlx::query("INSERT INTO play_history (path, duration, completed) VALUES (?1, ?2, ?3)")
-            .bind(path)
-            .bind(duration)
-            .bind(if completed { 1 } else { 0 })
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO play_history (path, duration, completed)
+            SELECT ?, ?, ?
+            WHERE EXISTS (SELECT 1 FROM songs WHERE path = ?)
+            "#,
+        )
+        .bind(path)
+        .bind(duration)
+        .bind(if completed { 1 } else { 0 })
+        .bind(path)
+        .execute(&self.pool)
+        .await?;
 
         debug!(
             "Recorded play history: {} duration={}s completed={}",
@@ -1190,6 +1215,36 @@ mod tests {
         assert_eq!(history[0].completed, Some(0));
         assert_eq!(history[1].completed, Some(1));
         assert_eq!(history[0].title.as_deref(), Some("HistSong"));
+    }
+
+    // ===== 外键约束回归测试：播放/喜欢未入库文件时不应抛 FOREIGN KEY constraint failed =====
+
+    #[tokio::test]
+    async fn test_toggle_like_unknown_song_ignored() {
+        let (db, _tmp) = setup_db().await;
+        // 路径不在 songs 表中（如尚未扫描入库的文件）→ 不应报错，且不写入
+        db.toggle_like("/music/not_scanned.mp3", true)
+            .await
+            .expect("未入库歌曲点赞不应触发外键错误");
+        assert!(db.get_liked_paths().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_increment_play_count_unknown_song_ignored() {
+        let (db, _tmp) = setup_db().await;
+        db.increment_play_count("/music/not_scanned.mp3")
+            .await
+            .expect("未入库歌曲递增播放次数不应触发外键错误");
+        assert!(db.get_play_counts().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_add_play_history_unknown_song_ignored() {
+        let (db, _tmp) = setup_db().await;
+        db.add_play_history("/music/not_scanned.mp3", 180, true)
+            .await
+            .expect("未入库歌曲记录播放历史不应触发外键错误");
+        assert!(db.get_play_history(None).await.unwrap().is_empty());
     }
 
     #[tokio::test]

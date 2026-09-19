@@ -70,20 +70,9 @@ pub async fn get_lyrics(
 pub async fn get_primary_music_folder(app: AppHandle) -> Result<ApiResponse<String>, String> {
     let db = app.state::<crate::database::Database>();
 
-    if let Ok(Some(custom_folder)) = db.get_setting("music_folder").await {
-        if !custom_folder.is_empty() && std::path::Path::new(&custom_folder).exists() {
-            return Ok(ApiResponse::ok(custom_folder));
-        }
-    }
+    let music_folder = crate::paths::resolve_music_folder(&app, &db).await?;
 
-    let music_folder = crate::paths::ensure_music_folder_exists(&app)?;
-    let folder_str = music_folder.to_string_lossy().to_string();
-
-    if let Err(e) = db.set_setting("music_folder", &folder_str).await {
-        tracing::warn!("Failed to persist music_folder setting: {}", e);
-    }
-
-    Ok(ApiResponse::ok(folder_str))
+    Ok(ApiResponse::ok(music_folder.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
@@ -91,7 +80,8 @@ pub async fn add_secondary_folder(
     app: AppHandle,
     target_path: String,
 ) -> Result<ApiResponse<String>, String> {
-    let primary_folder = crate::paths::ensure_music_folder_exists(&app)?;
+    let db = app.state::<crate::database::Database>();
+    let primary_folder = crate::paths::resolve_music_folder(&app, &db).await?;
 
     let target_path_buf = std::path::PathBuf::from(&target_path);
 
@@ -166,7 +156,8 @@ pub async fn remove_secondary_folder(
         return Ok(ApiResponse::err("无效的链接名称"));
     }
 
-    let primary_folder = crate::paths::get_music_folder_path(&app)?;
+    let db = app.state::<crate::database::Database>();
+    let primary_folder = crate::paths::resolve_music_folder(&app, &db).await?;
     let link_path = primary_folder.join(&link_name);
 
     // 二次校验：拼接后的路径必须仍在 primary_folder 内
@@ -222,7 +213,8 @@ pub async fn remove_secondary_folder(
 pub async fn get_secondary_folders(
     app: AppHandle,
 ) -> Result<ApiResponse<Vec<(String, String)>>, String> {
-    let primary_folder = crate::paths::get_music_folder_path(&app)?;
+    let db = app.state::<crate::database::Database>();
+    let primary_folder = crate::paths::resolve_music_folder(&app, &db).await?;
 
     let folders = tokio::task::spawn_blocking(move || {
         if !primary_folder.exists() {

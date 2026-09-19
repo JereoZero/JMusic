@@ -156,6 +156,15 @@ npm run lint        # 代码检查
 
 ## 📝 版本历史
 
+### v0.9.2 (2026-09-19)
+> 🐛 数据一致性修复 + 🎨 界面缩放重做 + 🟠 错误隔离 + 🔧 CI 修复
+- 🐛 **外键约束导致写入失败** — 喜欢/播放历史/播放次数的 `path` 外键指向 `songs(path)`，写入前未校验歌曲已入库 → 播放未入库文件时抛 `FOREIGN KEY constraint failed`（**播放次数静默丢失**）。改用 `INSERT ... SELECT ? WHERE EXISTS (...)` 原子化存在性判断，补 3 个回归测试
+- 🐛 **二级文件夹真源错位** — 写入用硬编码 `app_data/jmusic-file`、校验读 DB `music_folder`，形成双真源致路径白名单失效。新增 `paths::resolve_music_folder()` 以 DB 为唯一真源
+- 🎨 **界面缩放改用 webview 原生缩放** — 原 `<html>` font-size 方案只覆盖 rem，约 78 处 px（图标/封面/内联 gap）不跟随。改用 `Webview.setZoom()`，px/rem/图标/图片全部等比，并清理三处二次缩放补偿
+- 🟠 **视图级 ErrorBoundary** — 单个视图崩溃不再整页白屏（Sidebar/PlayerBar 保持可用），切换视图自动重置错误态
+- 🔧 **CI 修复** — `ci` job 由 `ubuntu-22.04` 改 `macos-latest`，修复 Linux 缺 GTK 致 `gen:types` 编译中断、所有 Release 无产物的问题
+- 📈 **测试增长** — 前端 147→153（12 文件），后端 55→58
+
 ### v0.9.0 (2026-06-27)
 > 🎵 kira 音频引擎重构
 - 🎵 **kira 0.12.1 替换手搓 player_thread** — 563 行手搓（mpsc+thread+RwLock+catch_unwind）重构为 345 行 kira `AudioManager` 实现，删除 `flac_decoder.rs`，净减少 438 行

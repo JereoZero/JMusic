@@ -2,6 +2,27 @@
 
 All notable changes to JlocalMusic will be documented in this file.
 
+## v0.9.2 (2026-09-19)
+
+### 🐛 数据一致性修复
+
+- 修复外键约束导致**喜欢 / 播放历史 / 播放次数写入失败** — `liked_songs` / `play_counts` / `play_history` 的 `path` 均外键指向 `songs(path)`，而写入前只校验「路径在音乐文件夹内」、未校验歌曲已入库，导致播放未入库文件时抛 `FOREIGN KEY constraint failed`（**播放次数静默丢失**）。改用 `INSERT ... SELECT ? WHERE EXISTS (SELECT 1 FROM songs WHERE path = ?)` 将存在性判断原子化，并补 3 个回归测试
+- 修复**二级文件夹建在错误目录、路径白名单失效** — 写入侧硬编码 `app_data/jmusic-file`，校验侧读 DB 设置 `music_folder`，形成双真源（`main.rs` 还有第三份重复兜底逻辑）。新增 `paths::resolve_music_folder(app, db)` 以 DB 为唯一真源，`misc.rs` 四处 + `main.rs` 全部改走该函数
+
+### 🎨 UI/UX 改进
+
+- 修复**界面缩放时 px 元素不跟随** — 原方案用 `<html>` font-size 驱动 Tailwind rem 缩放，只覆盖 rem，约 78 处 px（lucide 图标 `size={N}`、歌词封面、内联 gap）不跟随，放大档位表现为「文字变大、图标不变」。改用 Tauri webview 原生缩放 `getCurrentWebview().setZoom()`，px/rem/图标/图片全部等比；同步移除会二次缩放的 `factor` 手搓逻辑、`[data-ui-scale]` padding 覆盖与 `text-safe-*` 字号下限
+- 新增**视图级 ErrorBoundary 分层** — 此前只有顶层一处错误边界，任一视图崩溃会把 Sidebar + PlayerBar 一并替换为全屏错误页，用户失去播放控制且无视图级重试。现在 `<main>` 内新增视图级边界，仅替换内容区，切换视图自动重置错误态
+
+### 🔧 CI/CD 修复
+
+- 修复**所有 Release 无产物** — `ci` job 跑在 `ubuntu-22.04`，而 `npm run gen:types` 会 `cargo test` 编译整个 crate，在 Linux 上因 tauri 依赖链拉入 `gdk-sys`（GTK3）而失败（`gdk-3.0.pc not found`），`build` job 因 `needs: ci` 被跳过。`ci` 改为 `macos-latest`，与 build 矩阵及「Linux 不支持」的平台策略对齐
+
+### 🧪 测试
+
+- 前端 147 → **153**（12 文件，新增 ErrorBoundary 6 用例）
+- 后端测试函数 55 → **58**（database.rs 11 → 14，新增 3 个外键回归测试）
+
 ## v0.9.1 (2026-07-29)
 
 ### ⚡ 性能与稳定性优化

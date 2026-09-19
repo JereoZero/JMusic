@@ -1,9 +1,18 @@
 import { Component, type ReactNode } from 'react'
 import { getPrimaryColor } from '../stores/themeStore'
+import { cn } from '../utils/cn'
 
 interface Props {
   children: ReactNode
   fallback?: ReactNode
+  /**
+   * 是否占满整屏。
+   * - `true`（默认）：应用级兜底，Sidebar/PlayerBar 一并被替换
+   * - `false`：视图级隔离，仅替换出错视图的内容区，Sidebar/PlayerBar 保持可用
+   */
+  fullScreen?: boolean
+  title?: string
+  description?: string
 }
 
 interface State {
@@ -35,10 +44,23 @@ class ErrorBoundary extends Component<Props, State> {
         return this.props.fallback
       }
 
+      const { fullScreen = true } = this.props
+      const title = this.props.title ?? '出错了'
+      const description =
+        this.props.description ??
+        (fullScreen
+          ? '应用遇到了一个错误。请尝试刷新页面。'
+          : '该视图渲染出错。可切换到其他页面，或点击重试。')
+
       const primaryColor = getPrimaryColor()
 
       return (
-        <div className="min-h-screen bg-[#121212] flex items-center justify-center p-4">
+        <div
+          className={cn(
+            'flex items-center justify-center p-4',
+            fullScreen ? 'min-h-screen bg-[#121212]' : 'h-full w-full'
+          )}
+        >
           <div className="bg-[#1a1a1a] rounded-lg p-6 max-w-md w-full text-center">
             <div className="text-red-500 mb-4">
               <svg
@@ -55,8 +77,8 @@ class ErrorBoundary extends Component<Props, State> {
                 />
               </svg>
             </div>
-            <h2 className="text-xl font-bold text-white mb-2">出错了</h2>
-            <p className="text-zinc-400 mb-4">应用遇到了一个错误。请尝试刷新页面。</p>
+            <h2 className="text-xl font-bold text-white mb-2">{title}</h2>
+            <p className="text-zinc-400 mb-4">{description}</p>
             {this.state.error && (
               <pre className="text-xs text-zinc-500 bg-[#0a0a0a] p-2 rounded mb-4 overflow-auto max-h-32">
                 {this.state.error.message}

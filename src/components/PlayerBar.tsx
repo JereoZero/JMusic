@@ -79,10 +79,10 @@ export default function PlayerBar({ onToggleLyrics }: { onToggleLyrics?: () => v
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-safe-sm font-medium text-white truncate">
+          <p className="text-sm font-medium text-white truncate">
             {currentSong?.title || '未在播放'}
           </p>
-          <p className="text-safe-xs truncate text-zinc-500">{currentSong?.artist || ''}</p>
+          <p className="text-xs truncate text-zinc-500">{currentSong?.artist || ''}</p>
         </div>
       </div>
 

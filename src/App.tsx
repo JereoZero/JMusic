@@ -21,6 +21,7 @@ import * as api from './api/modules'
 import { createErrorHandler } from './utils/errorHandler'
 import { useDragRegion } from './hooks/useDragRegion'
 import { useUiStore, UI_SCALE_CONFIG } from './stores/uiStore'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type { ViewType } from './types'
 
 function AppContent() {
@@ -30,11 +31,12 @@ function AppContent() {
   const [showLyrics, setShowLyrics] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
 
-  // 界面缩放：调整 <html> font-size，Tailwind rem 单位随之等比缩放
+  // 界面缩放：webview 原生缩放，px/rem 全部等比跟随（等价浏览器 Ctrl +/-）
   const uiScale = useUiStore((s) => s.scale)
   useEffect(() => {
-    document.documentElement.style.fontSize = `${UI_SCALE_CONFIG[uiScale].rootFontSize}px`
-    document.documentElement.dataset.uiScale = uiScale
+    getCurrentWebview()
+      .setZoom(UI_SCALE_CONFIG[uiScale].zoom)
+      .catch((e) => console.error('Failed to apply UI scale:', e))
   }, [uiScale])
 
   // 启用全局窗口拖动（macOS titleBarStyle=Overlay 模式）
@@ -277,7 +279,16 @@ function AppContent() {
             onShowShortcuts={handleShowShortcuts}
             bgColor={sidebarBgColor}
           />
-          <main className="flex-1 overflow-hidden">{renderView()}</main>
+          <main className="flex-1 overflow-hidden">
+            {/* 视图级错误隔离：单个视图崩溃不影响 Sidebar/PlayerBar，切视图自动重置 */}
+            <ErrorBoundary
+              key={showLyrics ? 'lyrics' : currentView}
+              fullScreen={false}
+              title="页面加载出错"
+            >
+              {renderView()}
+            </ErrorBoundary>
+          </main>
         </div>
 
         <PlayerBar onToggleLyrics={handleToggleLyrics} />

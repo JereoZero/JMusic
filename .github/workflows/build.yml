@@ -16,7 +16,12 @@ permissions:
 jobs:
   # ===== CI 检查：每次 push/PR 都跑，tag push 时作为 build 的前置门禁 =====
   ci:
-    runs-on: ubuntu-22.04
+    # 必须用 macOS：本项目仅支持 macOS（Windows 后续 / Linux 不支持）。
+    # `npm run gen:types` 会 `cargo test` 编译整个 crate，在 Linux 上会因
+    # tauri 依赖链拉入 gdk-sys（GTK3）而失败：gdk-3.0.pc not found。
+    # 换用 ubuntu runner 需要额外 apt 安装 libgtk-3-dev 等一整套 Linux 桌面库，
+    # 而这些库与最终 macOS 产物无关，故直接对齐 build 矩阵用 macOS。
+    runs-on: macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
