@@ -3,7 +3,7 @@ use tauri::State;
 use super::common::{get_music_folder_and_targets, ApiResponse};
 use crate::database::Database;
 use crate::metadata::MetadataExtractor;
-use crate::path_validator::{is_path_in_music_folder, validate_audio_extension};
+use crate::path_validator::{resolve_path_in_music_folder, validate_audio_extension};
 use crate::player::AudioPlayer;
 use rayon::prelude::*;
 
@@ -18,28 +18,45 @@ pub async fn play_song(
         return Ok(ApiResponse::err("Invalid audio file format"));
     }
 
-    // 验证路径是否在音乐文件夹内
+    // 验证路径是否在音乐文件夹内，并取回 canonical 路径。
+    // 后续用 canonical 路径打开文件，消除「校验 → 打开」之间符号链接被替换的
+    // TOCTOU 窗口（原实现校验后仍用原始 path 打开，两者可能指向不同实体）。
     let (music_folder, secondary_targets) = match get_music_folder_and_targets(&db).await {
         Ok(v) => v,
         Err(e) => return Ok(ApiResponse::err(e)),
     };
 
-    if !is_path_in_music_folder(&path, &music_folder, &secondary_targets) {
-        return Ok(ApiResponse::err("Access denied: path outside music folder"));
-    }
+    let path_for_check = path.clone();
+    let resolved = tokio::task::spawn_blocking(move || {
+        resolve_path_in_music_folder(&path_for_check, &music_folder, &secondary_targets)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
-    let path_clone = path.clone();
-    let exists = tokio::task::spawn_blocking(move || std::path::Path::new(&path_clone).exists())
-        .await
-        .map_err(|e| e.to_string())?;
-    if !exists {
-        return Ok(ApiResponse::err("File not found"));
-    }
+    let safe_path = match resolved {
+        Some(p) => p,
+        None => {
+            // 区分「文件不存在」与「越权」以保持原有错误语义
+            let path_for_exists = path.clone();
+            let exists = tokio::task::spawn_blocking(move || {
+                std::path::Path::new(&path_for_exists).exists()
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            return Ok(ApiResponse::err(if exists {
+                "Access denied: path outside music folder"
+            } else {
+                "File not found"
+            }));
+        }
+    };
 
     // H3 优化：删除 probe_audio_file 预探测，直接调用 player.play()。
     // play() 内部 DsdDecoder::new 已含 symphonia probe，失败返回 Err，
     // 省去一次文件 I/O + format probe，切歌延迟降 30-50%。
-    match player.play(&path).await {
+    // 注意：用 canonical 路径打开音频；DB 仍用原始 path（二级文件夹歌曲在 DB 中
+    // 记录的是符号链接路径，canonical 后无法匹配）。
+    match player.play(&safe_path.to_string_lossy()).await {
         Ok(_) => {
             // 播放次数在 play 成功后递增（play 成功即证明可解码）
             // 语义为"用户尝试播放的次数"，而非"完整播放次数"
@@ -135,13 +152,21 @@ pub async fn get_metadata(
         Err(e) => return Ok(ApiResponse::err(e)),
     };
 
-    if !is_path_in_music_folder(&path, &music_folder, &secondary_targets) {
+    // 用 canonical 路径读取，消除「校验 → 读取」之间的 TOCTOU 窗口
+    let path_for_check = path.clone();
+    let resolved = tokio::task::spawn_blocking(move || {
+        resolve_path_in_music_folder(&path_for_check, &music_folder, &secondary_targets)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let Some(safe_path) = resolved else {
         return Ok(ApiResponse::err("Access denied: path outside music folder"));
-    }
+    };
 
     let extractor = MetadataExtractor::new();
 
-    match extractor.extract(&path).await {
+    match extractor.extract(&safe_path.to_string_lossy()).await {
         Ok(metadata) => Ok(ApiResponse::ok(metadata)),
         Err(e) => Ok(ApiResponse::err(e.to_string())),
     }
@@ -172,9 +197,12 @@ pub async fn get_metadata_batch(
         paths
             .into_par_iter()
             .filter(|path| validate_audio_extension(path))
-            .filter(|path| is_path_in_music_folder(path, &music_folder, &secondary_targets))
             .filter_map(|path| {
-                MetadataExtractor::extract_blocking(&path)
+                // 用 canonical 路径读取（消除 TOCTOU）；响应中仍返回**原始 path**，
+                // 前端按 path 匹配结果，且二级文件夹歌曲在 DB 中记录的是符号链接路径
+                let resolved =
+                    resolve_path_in_music_folder(&path, &music_folder, &secondary_targets)?;
+                MetadataExtractor::extract_blocking(&resolved.to_string_lossy())
                     .ok()
                     .map(|metadata| BatchMetadata { path, metadata })
             })

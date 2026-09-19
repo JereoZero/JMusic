@@ -110,6 +110,37 @@ pub fn is_path_in_music_folder(
     false
 }
 
+/// 校验路径在音乐文件夹内，并返回 **canonical 后的真实路径**。
+///
+/// 与 [`is_path_in_music_folder`] 的区别：
+/// - 仅接受**已存在**的文件（`canonicalize` 失败即返回 `None`）
+/// - 返回 canonical 路径，调用方应使用它打开文件
+///
+/// 用途：消除「先校验、后用原始路径打开」之间的 TOCTOU 窗口——攻击者若在两次
+/// 操作之间把受信目录内的符号链接指向外部文件，原始路径会绕过校验被打开。
+/// 使用本函数返回的 canonical 路径打开即可保证校验与打开的是同一实体。
+///
+/// 注意：DB 相关操作仍应使用**原始路径**，因为二级文件夹歌曲在 DB 中记录的是
+/// 符号链接路径，canonical 后无法与 DB 记录匹配。
+pub fn resolve_path_in_music_folder(
+    path_str: &str,
+    music_folder: &str,
+    secondary_targets: &[PathBuf],
+) -> Option<PathBuf> {
+    let canon = Path::new(path_str).canonicalize().ok()?;
+    let music_path = Path::new(music_folder).canonicalize().ok()?;
+
+    if path_starts_with_ci(&canon, &music_path) {
+        return Some(canon);
+    }
+    for target in secondary_targets {
+        if path_starts_with_ci(&canon, target) {
+            return Some(canon);
+        }
+    }
+    None
+}
+
 /// 校验 link_name 是单一路径组件（不含 / \ ..），防止路径遍历
 pub fn is_safe_link_name(name: &str) -> bool {
     if name.is_empty() || name == "." || name == ".." {
@@ -250,6 +281,63 @@ mod tests {
         assert!(validate_audio_extension("song.MP3"));
         assert!(validate_audio_extension("song.FLAC"));
         assert!(validate_audio_extension("song.NCM"));
+    }
+
+    // ===== resolve_path_in_music_folder（TOCTOU 防护：返回 canonical 路径）=====
+
+    #[test]
+    fn resolve_returns_canonical_path_inside_music_folder() {
+        let (_dir, music, _external) = create_test_tree();
+        let song = music.join("song.mp3");
+        let music_str = music.to_string_lossy().to_string();
+
+        let resolved = resolve_path_in_music_folder(&song.to_string_lossy(), &music_str, &[]);
+        assert_eq!(resolved, Some(song.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn resolve_returns_none_for_nonexistent_file() {
+        // 仅接受已存在的文件（canonicalize 失败即拒绝），
+        // 因此「文件不存在」不会再走到后续的打开逻辑
+        let (_dir, music, _external) = create_test_tree();
+        let ghost = music.join("ghost.mp3");
+        let music_str = music.to_string_lossy().to_string();
+
+        assert!(resolve_path_in_music_folder(&ghost.to_string_lossy(), &music_str, &[]).is_none());
+    }
+
+    #[test]
+    fn resolve_returns_none_for_path_outside_music_folder() {
+        let (_dir, music, external) = create_test_tree();
+        let outside = external.join("other.mp3");
+        let music_str = music.to_string_lossy().to_string();
+
+        assert!(resolve_path_in_music_folder(&outside.to_string_lossy(), &music_str, &[]).is_none());
+    }
+
+    #[test]
+    fn resolve_follows_symlink_only_within_whitelisted_target() {
+        // 受信目录内的符号链接若指向白名单之外，必须拒绝——
+        // 这是 TOCTOU 防护的核心：canonical 后越界即判定越权
+        let (_dir, music, external) = create_test_tree();
+        let link = music.join("evil.mp3");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(external.join("other.mp3"), &link).unwrap();
+            let music_str = music.to_string_lossy().to_string();
+            assert!(
+                resolve_path_in_music_folder(&link.to_string_lossy(), &music_str, &[]).is_none(),
+                "指向白名单外的符号链接必须被拒绝"
+            );
+            // 若该目标被登记为二级文件夹白名单，则应放行
+            let targets = vec![external.clone()];
+            assert_eq!(
+                resolve_path_in_music_folder(&link.to_string_lossy(), &music_str, &targets),
+                Some(external.join("other.mp3").canonicalize().unwrap())
+            );
+        }
+        #[cfg(not(unix))]
+        let _ = &link;
     }
 
     // ===== is_path_in_music_folder =====
