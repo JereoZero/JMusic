@@ -56,9 +56,13 @@ pub async fn get_lyrics(
     }
 
     let audio_path = std::path::PathBuf::from(path);
-    let lyrics = tokio::task::spawn_blocking(move || crate::lyrics::get_lyrics(&audio_path))
-        .await
-        .map_err(|e| e.to_string())?;
+    // 传入 music_folder + secondary_targets：派生的 .lrc 路径需独立做边界校验，
+    // 防止同目录下指向音乐文件夹外的 .lrc 符号链接被读取
+    let lyrics = tokio::task::spawn_blocking(move || {
+        crate::lyrics::get_lyrics(&audio_path, &music_folder, &secondary_targets)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     match lyrics {
         Some(lyrics) => Ok(ApiResponse::ok(Some(lyrics))),

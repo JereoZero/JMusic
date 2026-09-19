@@ -3,7 +3,7 @@ use lofty::file::TaggedFileExt;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::debug;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -13,26 +13,54 @@ pub struct LyricSource {
     pub source: String,
 }
 
+/// 解码 .lrc 文件字节流。
+///
+/// **UTF-8 优先**：去掉 BOM 后若能按 UTF-8 严格解码就直接采用。
+/// chardetng 对短文本/中英混排容易误判，而 UTF-8 是当前绝大多数 .lrc 的编码——
+/// 先走严格 UTF-8 可避免「本来合法却被探测成其他编码」导致整篇乱码。
+/// 非 UTF-8（GBK/BIG5/Shift-JIS 等遗留编码）才交给 chardetng 探测。
 fn decode_lrc_content(bytes: &[u8]) -> String {
+    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+
+    if let Ok(text) = std::str::from_utf8(body) {
+        return text.to_string();
+    }
+
     let mut detector = EncodingDetector::new();
-    detector.feed(bytes, true);
+    detector.feed(body, true);
     let (encoding, _confident) = detector.guess_assess(None, true);
-    let (decoded, _, _) = encoding.decode(bytes);
+    let (decoded, _, _) = encoding.decode(body);
     decoded.to_string()
 }
 
-pub fn load_lrc_file(audio_path: &Path) -> Option<LyricSource> {
-    let lrc_path = audio_path.with_extension("lrc");
+/// 加载与音频同名的 .lrc 文件。
+///
+/// ⚠️ 安全校验：`.lrc` 路径由音频路径派生，**必须独立做边界校验**——
+/// 上层只校验了音频路径，而同目录下一个名为 `xxx.lrc` 的符号链接完全可能
+/// 指向音乐文件夹之外（如 `/etc/passwd`），不校验就等于开放任意文件读取。
+/// 这里复用 `resolve_path_in_music_folder`（校验通过时返回 canonical 路径，
+/// 顺带消除「校验→打开」的 TOCTOU 窗口）。
+pub fn load_lrc_file(
+    audio_path: &Path,
+    music_folder: &str,
+    secondary_targets: &[PathBuf],
+) -> Option<LyricSource> {
+    for ext in ["lrc", "LRC"] {
+        let candidate = audio_path.with_extension(ext);
+        // 用 continue 而非 ?：首个候选不存在/校验失败时仍应继续尝试下一个扩展名
+        let Some(safe_path) = crate::path_validator::resolve_path_in_music_folder(
+            &candidate.to_string_lossy(),
+            music_folder,
+            secondary_targets,
+        ) else {
+            continue;
+        };
 
-    if !lrc_path.exists() {
-        let alt_lrc_path = audio_path.with_extension("LRC");
-        if !alt_lrc_path.exists() {
-            return None;
+        if let Some(lyrics) = load_lrc_from_path(&safe_path) {
+            return Some(lyrics);
         }
-        return load_lrc_from_path(&alt_lrc_path);
     }
-
-    load_lrc_from_path(&lrc_path)
+    None
 }
 
 fn load_lrc_from_path(lrc_path: &Path) -> Option<LyricSource> {
@@ -90,8 +118,12 @@ pub fn extract_embedded_lyrics(audio_path: &Path) -> Option<LyricSource> {
     None
 }
 
-pub fn get_lyrics(audio_path: &Path) -> Option<LyricSource> {
-    if let Some(lrc_lyrics) = load_lrc_file(audio_path) {
+pub fn get_lyrics(
+    audio_path: &Path,
+    music_folder: &str,
+    secondary_targets: &[PathBuf],
+) -> Option<LyricSource> {
+    if let Some(lrc_lyrics) = load_lrc_file(audio_path, music_folder, secondary_targets) {
         return Some(lrc_lyrics);
     }
 
