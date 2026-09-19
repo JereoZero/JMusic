@@ -14,6 +14,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR/.."
 SRC_TAURI_DIR="$PROJECT_DIR/src-tauri"
 GENERATED_DIR="$PROJECT_DIR/src/types/generated"
+DIST_DIR="$PROJECT_DIR/dist"
+
+# 0. 保证 dist/ 存在。
+#    tauri::generate_context!() 在**编译期**校验 tauri.conf.json 的
+#    frontendDist("../dist") 是否存在，缺失会直接 panic。而本脚本下面的
+#    `cargo test` 会编译整个 crate（含 main.rs），因此全新检出（无 dist/）时
+#    必须补一个占位目录，否则：
+#      - `npm run build`（prebuild → gen:types）在干净克隆上必然失败
+#      - CI 的 build job（tauri-action → beforeBuildCommand → npm run build）同样失败
+#    真实构建时 vite 会覆盖该目录，占位内容不影响产物。
+if [ ! -d "$DIST_DIR" ]; then
+  mkdir -p "$DIST_DIR"
+  printf '<!doctype html><title>placeholder</title>\n' >"$DIST_DIR/index.html"
+  echo "Created placeholder dist/ (required by tauri::generate_context!)"
+fi
 
 # 1. cargo test 触发 ts-rs 的 #[ts(export)] 导出到 bindings/
 #    只运行 export_bindings 测试，避免其他测试干扰
