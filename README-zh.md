@@ -156,8 +156,9 @@ npm run lint        # 代码检查
 
 ## 📝 版本历史
 
-### v0.9.2 (2026-09-19)
+### v0.9.3 (2026-09-19)
 > 🐛 数据一致性修复 + 🎨 界面缩放重做 + 🟠 错误隔离 + 🔧 CI 修复
+> （v0.9.2 tag 因 CI 故障未产出 release，以下修复实际随 v0.9.3 首次发布）
 - 🐛 **外键约束导致写入失败** — 喜欢/播放历史/播放次数的 `path` 外键指向 `songs(path)`，写入前未校验歌曲已入库 → 播放未入库文件时抛 `FOREIGN KEY constraint failed`（**播放次数静默丢失**）。改用 `INSERT ... SELECT ? WHERE EXISTS (...)` 原子化存在性判断，补 3 个回归测试
 - 🐛 **二级文件夹真源错位** — 写入用硬编码 `app_data/jmusic-file`、校验读 DB `music_folder`，形成双真源致路径白名单失效。新增 `paths::resolve_music_folder()` 以 DB 为唯一真源
 - 🎨 **界面缩放改用 webview 原生缩放** — 原 `<html>` font-size 方案只覆盖 rem，约 78 处 px（图标/封面/内联 gap）不跟随。改用 `Webview.setZoom()`，px/rem/图标/图片全部等比，并清理三处二次缩放补偿

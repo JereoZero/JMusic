@@ -2,7 +2,10 @@
 
 All notable changes to JlocalMusic will be documented in this file.
 
-## v0.9.2 (2026-09-19)
+## v0.9.3 (2026-09-19)
+
+> 说明：v0.9.2 的 tag 曾指向一个 CI 故障的 commit，其 release 从未产出（build job 因 `needs: ci` 被跳过）。
+> 下列修复实际随 **v0.9.3** 首次发布。
 
 ### 🐛 数据一致性修复
 
