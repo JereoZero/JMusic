@@ -16,12 +16,24 @@ All notable changes to JlocalMusic will be documented in this file.
 
 ### 🔧 CI/CD 修复
 
-- 修复**所有 Release 无产物** — `ci` job 跑在 `ubuntu-22.04`，而 `npm run gen:types` 会 `cargo test` 编译整个 crate，在 Linux 上因 tauri 依赖链拉入 `gdk-sys`（GTK3）而失败（`gdk-3.0.pc not found`），`build` job 因 `needs: ci` 被跳过。`ci` 改为 `macos-latest`，与 build 矩阵及「Linux 不支持」的平台策略对齐
+- 修复**所有 Release 无产物**（两处连锁根因）：
+  1. `ci` job 跑在 `ubuntu-22.04`，而 `npm run gen:types` 会 `cargo test` 编译整个 crate，在 Linux 上因 tauri 依赖链拉入 `gdk-sys`（GTK3）而失败。`ci` 改为 `macos-latest`，与 build 矩阵及「Linux 不支持」的平台策略对齐
+  2. `tauri::generate_context!()` 在编译期校验 `frontendDist("../dist")` 是否存在，而 CI 为全新检出、`dist/` 不存在，导致 `cargo test` panic。在 `gen:types` 前增加 `npx vite build` 产出 `dist/`
+- 修复 **`format:check` 必然失败** — `src/types/generated/*.ts` 由 ts-rs 直接生成并提交（未做 prettier 格式化），而 CI 的「类型同步校验」要求提交内容与 ts-rs 原始输出逐字节一致，紧随其后的 `format:check` 又要求它们符合 prettier，两者互斥。`.prettierignore` 增加 `src/types/generated/`
+- ✅ CI 自 v0.8.20 引入以来**首次全绿**（`Rust check` + `Rust tests` **69 个测试全部通过**）
+
+### 🔒 安全加固
+
+- 修复**播放/元数据读取的 TOCTOU 窗口** — `play_song` / `get_metadata` / `get_metadata_batch` 均先用 `is_path_in_music_folder` 校验（内部 `canonicalize`），随后却用**原始 path** 打开文件；两者之间若受信目录内的符号链接被替换指向外部文件，校验会被绕过。新增 `path_validator::resolve_path_in_music_folder()`，校验通过时返回 canonical 路径供打开文件使用，保证「校验的实体 == 打开的实体」。DB 操作与响应体仍使用原始 path（二级文件夹歌曲在 DB 中记录的是符号链接路径）
+
+### 🐛 其他修复
+
+- 修复**0 时长曲目导致进度循环 rAF 空转** — `updateProgress` 在 `maxTime<=0`（元数据提取失败但文件可解码，duration 记为 `0.0`）时每帧重新 `requestAnimationFrame` 却从不 `setState`，导致 60fps 空转且 `accumulatedPlayedMs` 无界累加（污染播放历史时长）。改为停止调度，并在后端 `playback_progress` 带回真实 duration 时恢复推进
 
 ### 🧪 测试
 
-- 前端 147 → **153**（12 文件，新增 ErrorBoundary 6 用例）
-- 后端测试函数 55 → **58**（database.rs 11 → 14，新增 3 个外键回归测试）
+- 前端 147 → **155**（12 文件；新增 ErrorBoundary 6 用例 + 进度循环 2 用例）
+- 后端 **69 个测试全部通过**（新增 3 个外键回归测试 + 4 个路径校验测试 + 4 个 TOCTOU 测试），CI 实测
 
 ## v0.9.1 (2026-07-29)
 

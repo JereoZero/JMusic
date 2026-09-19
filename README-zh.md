@@ -162,8 +162,9 @@ npm run lint        # 代码检查
 - 🐛 **二级文件夹真源错位** — 写入用硬编码 `app_data/jmusic-file`、校验读 DB `music_folder`，形成双真源致路径白名单失效。新增 `paths::resolve_music_folder()` 以 DB 为唯一真源
 - 🎨 **界面缩放改用 webview 原生缩放** — 原 `<html>` font-size 方案只覆盖 rem，约 78 处 px（图标/封面/内联 gap）不跟随。改用 `Webview.setZoom()`，px/rem/图标/图片全部等比，并清理三处二次缩放补偿
 - 🟠 **视图级 ErrorBoundary** — 单个视图崩溃不再整页白屏（Sidebar/PlayerBar 保持可用），切换视图自动重置错误态
-- 🔧 **CI 修复** — `ci` job 由 `ubuntu-22.04` 改 `macos-latest`，修复 Linux 缺 GTK 致 `gen:types` 编译中断、所有 Release 无产物的问题
-- 📈 **测试增长** — 前端 147→153（12 文件），后端 55→58
+- 🔧 **CI 修复** — 三处连锁故障：`ci` job 由 `ubuntu-22.04` 改 `macos-latest`（Linux 缺 GTK）、`gen:types` 前补 `npx vite build`（缺 `dist/` 致 `generate_context!` panic）、`.prettierignore` 排除 ts-rs 生成物（与类型同步校验互斥）。CI 自 v0.8.20 引入以来**首次全绿**
+- 🔒 **TOCTOU 修复** — 播放/元数据读取先校验后用原始路径打开，符号链接可在窗口期被替换绕过；新增 `resolve_path_in_music_folder()` 返回 canonical 路径供打开
+- 📈 **测试增长** — 前端 147→155（12 文件），后端 **69 个测试 CI 实测全通过**
 
 ### v0.9.0 (2026-06-27)
 > 🎵 kira 音频引擎重构
