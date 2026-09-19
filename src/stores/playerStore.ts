@@ -121,7 +121,13 @@ function updateProgress() {
   const maxTime = store.duration ?? store.currentSong.duration ?? 0
 
   if (maxTime <= 0) {
-    animationFrameId = requestAnimationFrame(updateProgress)
+    // 时长未知（元数据提取失败但文件可解码，duration 记为 0.0）：
+    // 此时推进 currentTime 无意义，必须停止调度而不是继续 rAF 自旋
+    // （原实现每帧重新 requestAnimationFrame 却从不 setState，导致 60fps 空转
+    //   且 accumulatedPlayedMs 无界累加）。
+    // 后端 playback_progress 事件仍会更新 currentTime，并在 duration 变为已知时
+    // 由监听器重新启动本循环，因此不会丢失进度与 track_finished。
+    animationFrameId = null
     return
   }
 
@@ -609,6 +615,12 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
           }
         } else if (duration > 0 && duration !== store.duration) {
           set({ duration })
+        }
+
+        // duration 由未知(0)变为已知时，恢复 rAF 平滑推进
+        // （updateProgress 在 maxTime<=0 时会停止调度，见其内注释）
+        if (duration > 0) {
+          startProgressTimer()
         }
       }
     })

@@ -168,6 +168,65 @@ describe('playerStore - playSong', () => {
   })
 })
 
+describe('playerStore - 进度循环（0 时长曲目）', () => {
+  let frames: FrameRequestCallback[]
+
+  beforeEach(() => {
+    // 手动驱动 rAF，便于断言「是否还在继续调度」
+    frames = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      frames.push(cb)
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+
+    // animationFrameId 是模块级变量，会被前序测试遗留的非 null 值污染，
+    // 导致 startProgressTimer() 提前返回。destroy() 内部调用 resetModuleState()
+    // → stopProgressTimer() 将其置空，是唯一可用的公开重置入口。
+    usePlayerStore.getState().destroy()
+    usePlayerStore.setState({
+      currentSong: null,
+      isPlaying: false,
+      currentTime: 0,
+      duration: 0,
+    })
+    vi.clearAllMocks()
+    frames = []
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** 消费当前已排队的帧，返回实际执行的帧数 */
+  function flushFrames(max = 5) {
+    let ran = 0
+    while (frames.length && ran < max) {
+      const cb = frames.shift()!
+      cb(performance.now())
+      ran++
+    }
+    return ran
+  }
+
+  it('duration 为 0 时停止调度，不再 rAF 空转', async () => {
+    await usePlayerStore.getState().playSong(createMockSong({ duration: 0 }))
+    expect(frames.length).toBe(1) // playSong 启动了进度循环
+
+    flushFrames()
+    // 修复前：每帧都重新 requestAnimationFrame，会不断有新帧排队
+    expect(frames.length).toBe(0)
+  })
+
+  it('duration 正常时持续调度以推进进度', async () => {
+    await usePlayerStore.getState().playSong(createMockSong({ duration: 180 }))
+    expect(frames.length).toBe(1)
+
+    flushFrames()
+    expect(frames.length).toBe(1) // 仍在继续调度下一帧
+  })
+})
+
 describe('playerStore - togglePlay', () => {
   beforeEach(() => {
     vi.clearAllMocks()
