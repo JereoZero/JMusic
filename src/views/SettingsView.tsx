@@ -342,7 +342,14 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   }
 
   const handleClearPlayHistory = async () => {
-    if (!(await confirmDialog({ title: '清空播放历史？', variant: 'danger', confirmText: '清空' })))
+    if (
+      !(await confirmDialog({
+        title: '清空播放历史？',
+        description: '播放历史与播放次数都会被清零，此操作不可恢复。',
+        variant: 'danger',
+        confirmText: '清空',
+      }))
+    )
       return
     setLoading(true)
     try {
@@ -435,7 +442,19 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
     setLoading(true)
     try {
       const selected = await api.selectFolder()
-      if (selected) {
+      if (selected && selected !== musicFolder) {
+        // 换音乐文件夹会清掉旧目录的曲库记录（否则那些歌会留在列表中但所有操作
+        // 都被「路径越权」拒绝，成为点不动的幽灵条目）。清理由后端 set_setting 完成，
+        // 需要让用户事先知情，因为喜欢/播放历史会一并删除且不可恢复。
+        const confirmed = await confirmDialog({
+          title: '更换音乐文件夹？',
+          description:
+            '旧文件夹的歌曲记录将被移出曲库，其「喜欢」与「播放历史」会一并删除，此操作不可恢复。',
+          variant: 'danger',
+          confirmText: '更换',
+        })
+        if (!confirmed) return
+
         setMusicFolder(selected)
         await api.setSetting('music_folder', selected)
         const result = await api.scanFolder(selected)

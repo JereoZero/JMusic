@@ -147,6 +147,10 @@ pub async fn add_secondary_folder(
     .await
     .map_err(|e| e.to_string())??;
 
+    // 新增了二级文件夹符号链接 → 让路径校验的白名单缓存失效，
+    // 否则在缓存过期前，该链接下的歌曲会被判为越权（Access denied）
+    crate::path_validator::invalidate_secondary_targets_cache();
+
     Ok(ApiResponse::ok(link_path))
 }
 
@@ -155,62 +159,68 @@ pub async fn remove_secondary_folder(
     app: AppHandle,
     link_name: String,
 ) -> Result<ApiResponse<()>, String> {
-    // 安全检查：link_name 必须是单一路径组件，防止路径遍历
-    if !crate::path_validator::is_safe_link_name(&link_name) {
-        return Ok(ApiResponse::err("无效的链接名称"));
-    }
-
     let db = app.state::<crate::database::Database>();
     let primary_folder = crate::paths::resolve_music_folder(&app, &db).await?;
-    let link_path = primary_folder.join(&link_name);
 
-    // 二次校验：拼接后的路径必须仍在 primary_folder 内
-    let link_canon = match link_path.canonicalize() {
-        Ok(c) => c,
-        Err(_) => return Ok(ApiResponse::err("指定的路径不存在")),
-    };
-    let primary_canon = primary_folder.canonicalize().map_err(|e| e.to_string())?;
-    if !link_canon.starts_with(&primary_canon) {
-        return Ok(ApiResponse::err("指定的路径不在音乐文件夹内"));
+    // 同步 fs 操作（symlink_metadata + 删除）放到 blocking 线程池
+    match tokio::task::spawn_blocking(move || remove_secondary_link(&primary_folder, &link_name))
+        .await
+    {
+        Ok(Ok(())) => {
+            // 删除了二级文件夹符号链接 → 让路径校验的白名单缓存失效
+            crate::path_validator::invalidate_secondary_targets_cache();
+            Ok(ApiResponse::ok(()))
+        }
+        Ok(Err(e)) => Ok(ApiResponse::err(e)),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 校验并删除 `primary_folder` 下的二级文件夹符号链接。
+///
+/// 与命令层分离以便直接单测（命令层需要 AppHandle + DB，单测里构造不出来）。
+fn remove_secondary_link(primary_folder: &std::path::Path, link_name: &str) -> Result<(), String> {
+    // 安全检查：link_name 必须是单一路径组件，防止路径遍历
+    if !crate::path_validator::is_safe_link_name(link_name) {
+        return Err("无效的链接名称".to_string());
     }
 
-    if !link_path.exists() {
-        return Ok(ApiResponse::err("指定的路径不存在"));
+    let link_path = primary_folder.join(link_name);
+
+    // 路径安全性：link_name 已由 is_safe_link_name 限定为单一组件（拒绝空、".."、
+    // 分隔符），因此 join 的结果必然落在 primary_folder 内，不需要再做前缀校验。
+    //
+    // ⚠️ 这里**绝不能**用 `link_path.canonicalize()` + `starts_with(primary)` 校验：
+    // 副文件夹本身就是指向**外部**目录的符号链接，canonicalize 会解析到那个外部真实
+    // 目标，而外部目标必然不在 primary_folder 内 → 删除操作 100% 返回
+    // "指定的路径不在音乐文件夹内"。而且目标盘未挂载时 canonicalize 会直接失败，
+    // 悬空链接永远删不掉。
+    //
+    // 存在性检查必须用 symlink_metadata（不跟随链接），否则悬空链接会被判为不存在。
+    let metadata =
+        std::fs::symlink_metadata(&link_path).map_err(|_| "指定的路径不存在".to_string())?;
+    let file_type = metadata.file_type();
+
+    #[cfg(unix)]
+    {
+        if !file_type.is_symlink() {
+            return Err("指定的路径不是符号链接".to_string());
+        }
+        std::fs::remove_file(&link_path).map_err(|e| format!("删除符号链接失败: {}", e))?;
     }
 
-    // 在 spawn_blocking 中执行同步文件删除
-    tokio::task::spawn_blocking(move || {
-        let metadata = std::fs::symlink_metadata(&link_path)
-            .map_err(|e| format!("获取链接信息失败: {}", e))?;
-
-        let file_type = metadata.file_type();
-
-        #[cfg(unix)]
-        {
-            if !file_type.is_symlink() {
-                return Err("指定的路径不是符号链接".to_string());
-            }
+    #[cfg(windows)]
+    {
+        if file_type.is_dir() {
+            std::fs::remove_dir(&link_path).map_err(|e| format!("删除 junction 失败: {}", e))?;
+        } else if file_type.is_symlink() {
             std::fs::remove_file(&link_path).map_err(|e| format!("删除符号链接失败: {}", e))?;
+        } else {
+            return Err("指定的路径不是符号链接或 junction".to_string());
         }
+    }
 
-        #[cfg(windows)]
-        {
-            if file_type.is_dir() {
-                std::fs::remove_dir(&link_path)
-                    .map_err(|e| format!("删除 junction 失败: {}", e))?;
-            } else if file_type.is_symlink() {
-                std::fs::remove_file(&link_path).map_err(|e| format!("删除符号链接失败: {}", e))?;
-            } else {
-                return Err("指定的路径不是符号链接或 junction".to_string());
-            }
-        }
-
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    Ok(ApiResponse::ok(()))
+    Ok(())
 }
 
 #[tauri::command]
@@ -309,4 +319,85 @@ fn is_sensitive_path(path: &std::path::Path) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remove_secondary_link_rejects_unsafe_names() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        for name in ["", ".", "..", "a/b", "a\\b", "..%2f"] {
+            assert!(
+                remove_secondary_link(tmp.path(), name).is_err(),
+                "非法链接名 {:?} 应被拒绝",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn remove_secondary_link_reports_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            remove_secondary_link(tmp.path(), "no-such-link").unwrap_err(),
+            "指定的路径不存在"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_secondary_link_removes_link_pointing_outside_primary() {
+        // 回归：旧实现用 canonicalize + starts_with(primary) 校验，而副文件夹本身
+        // 就指向外部目录 → 该判断必然失败，删除功能 100% 不可用。
+        let tmp = tempfile::TempDir::new().unwrap();
+        let primary = tmp.path().join("primary");
+        let external = tmp.path().join("external");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        std::fs::write(external.join("song.mp3"), b"x").unwrap();
+
+        let link = primary.join("my-link");
+        std::os::unix::fs::symlink(&external, &link).unwrap();
+
+        // 旧校验就是在这里失败的：链接解析后的目标不在 primary 内
+        assert!(!link
+            .canonicalize()
+            .unwrap()
+            .starts_with(primary.canonicalize().unwrap()));
+
+        remove_secondary_link(&primary, "my-link").expect("指向外部的副文件夹链接应能删除");
+        assert!(std::fs::symlink_metadata(&link).is_err(), "链接应已被删除");
+        assert!(
+            external.join("song.mp3").exists(),
+            "只能删链接本身，链接目标的内容不得被删除"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_secondary_link_removes_dangling_link() {
+        // 目标盘未挂载 / 目标已被删 → 链接悬空。旧实现 canonicalize 失败即报
+        // "指定的路径不存在"，悬空链接永远删不掉。
+        let tmp = tempfile::TempDir::new().unwrap();
+        let primary = tmp.path().join("primary");
+        std::fs::create_dir_all(&primary).unwrap();
+
+        let link = primary.join("dangling");
+        std::os::unix::fs::symlink(tmp.path().join("not-mounted"), &link).unwrap();
+
+        remove_secondary_link(&primary, "dangling").expect("悬空链接应能删除");
+        assert!(std::fs::symlink_metadata(&link).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_secondary_link_rejects_regular_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("plain.txt"), b"x").unwrap();
+
+        assert!(remove_secondary_link(tmp.path(), "plain.txt").is_err());
+        assert!(tmp.path().join("plain.txt").exists(), "普通文件不得被删除");
+    }
 }

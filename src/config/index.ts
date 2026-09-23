@@ -1,5 +1,5 @@
 export const APP_CONFIG = {
-  version: '0.9.4',
+  version: '0.9.5',
   name: 'JlocalMusic',
   repository: 'https://github.com/JereoZero/JMusic',
   releasesUrl: 'https://github.com/JereoZero/JMusic/releases',

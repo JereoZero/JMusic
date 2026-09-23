@@ -8,6 +8,7 @@ import { APP_CONFIG } from '../config'
 import { cn } from '../utils/cn'
 import { getSongListGridColumns, type SongListColumnConfig } from './songListColumns'
 import SongItem from './SongItem'
+import { prefetchCovers } from '../hooks/useSongCover'
 import { usePlayQueueStore } from '../stores/playQueueStore'
 import { useThemeStore } from '../stores/themeStore'
 import { THEMES } from '../config/themes'
@@ -174,6 +175,16 @@ export default function SongList({
 
   const items = virtualizer.getVirtualItems()
 
+  // 可见区封面批量预取：把短时间内的可见行合并成一次 IPC
+  // （逐行各自请求会为每一行发一次往返）。prefetchCovers 内部会跳过已缓存
+  // 与已在请求中的路径，并做 60ms 合并，因此这里可以直接跟随 items 变化调用。
+  useEffect(() => {
+    const paths = items
+      .map((item) => songs[item.index]?.path)
+      .filter((p): p is string => Boolean(p))
+    prefetchCovers(paths)
+  }, [items, songs])
+
   // 用 ref 持有最新 songs，使 handlePlay 引用稳定，避免列表项因 onPlay 变化全量重渲染
   const songsRef = useRef(songs)
   songsRef.current = songs
@@ -203,10 +214,15 @@ export default function SongList({
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedPaths.size, clearSelection])
 
-  // 列表数据变化（搜索/排序/扫描）时清空选择，避免选中不存在的歌
+  // 列表**内容**变化（搜索/排序/扫描）时清空选择，避免选中不存在的歌。
+  //
+  // 依赖用「路径序列」而不是 `songs` 引用：上游任何导致数组重建但内容相同的
+  // 操作（例如点赞触发的重排）都不该清掉用户的多选 —— 那是个真实困扰，
+  // 用户先多选几首、再点某一行爱心，选择会莫名消失。
+  const songPathsKey = useMemo(() => songs.map((s) => s.path).join('\n'), [songs])
   useEffect(() => {
     clearSelection()
-  }, [songs, clearSelection])
+  }, [songPathsKey, clearSelection])
 
   // 用 ref 持有最新 selectedPaths，让 handleItemClick 引用稳定，避免所有 SongItem 重渲染
   const selectedPathsRef = useRef(selectedPaths)

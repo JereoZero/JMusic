@@ -222,7 +222,35 @@ impl AudioPlayer {
             info!("Play request cancelled before manager play: {}", path);
             return Err("Play request cancelled".to_string());
         }
-        let mut new_handle = manager_guard.play(sound_data).map_err(|e| e.to_string())?;
+        let mut new_handle = match manager_guard.play(sound_data) {
+            Ok(handle) => handle,
+            Err(e) => {
+                let msg = e.to_string();
+                // manager.play() 失败：上面已把 handle 清空，但 state 仍停留在上一首的
+                // Playing/Paused。必须显式回滚到终态 Stopped 并清空 position/duration，
+                // 否则界面会残留「播放中」、进度条冻结，且 handle=None 会让进度轮询进入
+                // idle 而永不自我纠正。Stopped 与 stop() / 自然结束(progress_loop) 的终态
+                // 一致，前端据此停止计时器并清空播放态。
+                drop(manager_guard);
+                drop(handle_guard);
+                {
+                    let mut st = self.state.write().await;
+                    st.state = PlaybackState::Stopped;
+                    st.current_path = None;
+                    st.position = 0.0;
+                    st.duration = None;
+                }
+                // 广播播放失败，让前端立即停止计时器/清掉播放态
+                // （payload 结构与 resume() 的 playback_error 保持一致）。
+                if let Err(emit_err) = self.app_handle.emit(
+                    "playback_error",
+                    serde_json::json!({ "error": msg.clone() }),
+                ) {
+                    warn!("Failed to emit playback_error: {}", emit_err);
+                }
+                return Err(msg);
+            }
+        };
 
         // 立即设置音量（play 与 set_volume 之间无 await，窗口为亚微秒级）
         new_handle.set_volume(amplitude_to_decibels(volume), Tween::default());

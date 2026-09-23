@@ -125,6 +125,14 @@ export const mockApi = {
     return null
   },
 
+  getSongCover: async (_path: string): Promise<string | null> => {
+    return null
+  },
+
+  getSongCoversBatch: async (_paths: string[]): Promise<Record<string, string>> => {
+    return {}
+  },
+
   // 喜欢相关
   getLikedPaths: async (): Promise<string[]> => Array.from(mockLikedPaths),
 

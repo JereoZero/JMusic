@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { Toaster, toast } from 'sonner'
 import { useHotkeys } from 'react-hotkeys-hook'
 import Sidebar from './components/Sidebar'
@@ -6,14 +6,9 @@ import PlayerBar from './components/PlayerBar'
 import AlertDialog from './components/AlertDialog'
 import ShortcutsHelp from './components/ShortcutsHelp'
 import ErrorBoundary from './components/ErrorBoundary'
-import LocalView from './views/LocalView'
 import LikedView from './views/LikedView'
-import HiddenView from './views/HiddenView'
-import HistoryView from './views/HistoryView'
-import SettingsView from './views/SettingsView'
-import LyricsView from './views/LyricsView'
 import { APP_CONFIG } from './config'
-import { usePlayerStore } from './stores/playerStore'
+import { usePlayerStore, trackInitialLibraryLoad } from './stores/playerStore'
 import { useLibraryStore } from './stores/libraryStore'
 import { useCoverStore, initCoverStore } from './stores/coverStore'
 import { useTheme } from './hooks/useTheme'
@@ -22,7 +17,29 @@ import { createErrorHandler } from './utils/errorHandler'
 import { useDragRegion } from './hooks/useDragRegion'
 import { useUiStore, UI_SCALE_CONFIG } from './stores/uiStore'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { listen } from '@tauri-apps/api/event'
 import type { ViewType } from './types'
+
+// 仅在实际切到对应视图/进入歌词页时才加载：
+// LyricsView 依赖 lrc-file-parser，SettingsView 体积较大，都无需进首屏关键路径。
+// 首屏默认渲染的 LikedView 保持静态引入，避免组件懒加载反而增加首屏开销。
+const LocalView = lazy(() => import('./views/LocalView'))
+const HiddenView = lazy(() => import('./views/HiddenView'))
+const HistoryView = lazy(() => import('./views/HistoryView'))
+const SettingsView = lazy(() => import('./views/SettingsView'))
+const LyricsView = lazy(() => import('./views/LyricsView'))
+
+// 懒加载视图的占位：沿用项目已有的居中 spinner 写法（见 LyricsView 的加载态）
+function ViewLoadingFallback() {
+  return (
+    <div className="h-full flex items-center justify-center">
+      <div className="flex items-center gap-2 text-zinc-600">
+        <div className="w-4 h-4 border-2 border-zinc-600 border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm">加载中...</p>
+      </div>
+    </div>
+  )
+}
 
 function AppContent() {
   const [currentView, setCurrentView] = useState<ViewType>('liked')
@@ -53,6 +70,7 @@ function AppContent() {
   const initEventListeners = usePlayerStore((s) => s.initEventListeners)
   const cleanupEventListeners = usePlayerStore((s) => s.cleanupEventListeners)
   const fetchSongs = useLibraryStore((s) => s.fetchSongs)
+  const fetchSongsAfterScan = useLibraryStore((s) => s.fetchSongsAfterScan)
   const fetchLikedPaths = useLibraryStore((s) => s.fetchLikedPaths)
   const fetchHiddenPaths = useLibraryStore((s) => s.fetchHiddenPaths)
 
@@ -68,11 +86,53 @@ function AppContent() {
     initCoverStore()
   }, [])
 
+  // 扫描完成通知：后端（启动时的自动扫描）在**写库完成后**广播 scan_complete。
+  //
+  // 为什么必须监听：启动扫描是后台异步任务，而下面的初始 fetchSongs 在空库时是
+  // 毫秒级返回的，扫描却要走文件系统 + 提取元数据 —— 界面会一直停在「曲库为空」，
+  // 用户只能手动下拉刷新或进设置重新扫描。
+  //
+  // 注册顺序有意放在初始 loadData **之前**：若扫描在本监听器注册前就已结束，
+  // 说明数据早已落库，那次 fetchSongs 本身就能拿到完整数据，不存在漏更新的窗口。
+  useEffect(() => {
+    let cancelled = false
+    let unlistenComplete: (() => void) | null = null
+    let unlistenError: (() => void) | null = null
+
+    listen('scan_complete', () => {
+      if (!cancelled) void fetchSongsAfterScan()
+    })
+      .then((fn) => {
+        if (cancelled) fn()
+        else unlistenComplete = fn
+      })
+      .catch((e) => console.error('scan_complete listen failed:', e))
+
+    listen<{ message: string }>('scan_error', (event) => {
+      if (!cancelled) toast.error(`扫描失败：${event.payload.message}`)
+    })
+      .then((fn) => {
+        if (cancelled) fn()
+        else unlistenError = fn
+      })
+      .catch((e) => console.error('scan_error listen failed:', e))
+
+    return () => {
+      cancelled = true
+      unlistenComplete?.()
+      unlistenError?.()
+    }
+  }, [fetchSongsAfterScan])
+
   useEffect(() => {
     let cancelled = false
     const loadData = async () => {
+      // 登记整库加载 Promise：restoreLastSong 需要整库数据时会 await 同一个请求，
+      // 避免冷启动时与这里并发、把全量歌曲拉两遍（库越大越明显）。
+      const libraryLoad = Promise.all([fetchSongs(), fetchLikedPaths(), fetchHiddenPaths()])
+      trackInitialLibraryLoad(libraryLoad)
       try {
-        await Promise.all([fetchSongs(), fetchLikedPaths(), fetchHiddenPaths()])
+        await libraryLoad
         if (!cancelled) toast('加载完成')
       } catch (error) {
         if (!cancelled) {
@@ -286,7 +346,7 @@ function AppContent() {
               fullScreen={false}
               title="页面加载出错"
             >
-              {renderView()}
+              <Suspense fallback={<ViewLoadingFallback />}>{renderView()}</Suspense>
             </ErrorBoundary>
           </main>
         </div>

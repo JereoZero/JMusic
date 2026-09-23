@@ -20,7 +20,7 @@ jobs:
     # `npm run gen:types` 会 `cargo test` 编译整个 crate，在 Linux 上会因
     # tauri 依赖链拉入 gdk-sys（GTK3）而失败：gdk-3.0.pc not found。
     # 换用 ubuntu runner 需要额外 apt 安装 libgtk-3-dev 等一整套 Linux 桌面库，
-    # 而这些库与最终 macOS 产物无关，故直接对齐 build 矩阵用 macOS。
+    # 而这些库与最终 macOS 产物无关，故直接对齐 build 用 macOS。
     runs-on: macos-latest
     steps:
       - name: Checkout repository
@@ -94,12 +94,6 @@ jobs:
             artifact-glob: |
               src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
               src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact-name: jlocal-macos-x86_64
-            artifact-glob: |
-              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
-              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
 
     steps:
       - name: Checkout repository

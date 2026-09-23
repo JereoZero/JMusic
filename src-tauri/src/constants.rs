@@ -25,7 +25,3 @@ pub fn is_encrypted_extension(ext: &str) -> bool {
 #[allow(dead_code)]
 pub const DEFAULT_VOLUME: f32 = 0.8;
 pub const PROGRESS_EMIT_INTERVAL_MS: u64 = 250;
-
-// 数据库配置
-#[allow(dead_code)]
-pub const MAX_DB_CONNECTIONS: u32 = 10;

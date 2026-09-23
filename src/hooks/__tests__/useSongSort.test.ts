@@ -126,6 +126,50 @@ describe('useSongSort', () => {
       expect(result.current.likeSort).toBe('liked-first')
       expect(result.current.sortedItems[0].path).toBe('/music/test.mp3')
     })
+
+    it('默认档下点赞不应重建 sortedItems（否则会清掉列表多选）', () => {
+      // 回归：likedPaths 是排序依赖，若默认档也依赖它，点赞会重建 sortedItems
+      // → 下游 SongList 收到新数组引用 → 触发 clearSelection，用户的多选被莫名清空。
+      const songs = [
+        createMockSong({ id: '1', path: '/music/1.mp3' }),
+        createMockSong({ id: '2', path: '/music/2.mp3' }),
+      ]
+
+      const { result, rerender } = renderHook(
+        ({ liked }: { liked: Set<string> }) => useSongSort(songs, liked),
+        { initialProps: { liked: new Set<string>() } }
+      )
+
+      expect(result.current.likeSort).toBe('default')
+      const before = result.current.sortedItems
+
+      // 模拟「点赞一首」：likedPaths 换成新 Set（内容变了，引用也变了）
+      rerender({ liked: new Set(['/music/1.mp3']) })
+
+      expect(result.current.sortedItems).toBe(before)
+    })
+
+    it('启用喜欢排序后，点赞仍应触发重排', () => {
+      // 上一条的收窄不能破坏「喜欢优先」功能本身
+      const songs = [
+        createMockSong({ id: '1', path: '/music/1.mp3' }),
+        createMockSong({ id: '2', path: '/music/2.mp3' }),
+      ]
+
+      const { result, rerender } = renderHook(
+        ({ liked }: { liked: Set<string> }) => useSongSort(songs, liked),
+        { initialProps: { liked: new Set<string>() } }
+      )
+
+      act(() => {
+        result.current.handleLikeSort()
+      })
+      expect(result.current.likeSort).toBe('liked-first')
+
+      rerender({ liked: new Set(['/music/2.mp3']) })
+
+      expect(result.current.sortedItems[0].path).toBe('/music/2.mp3')
+    })
   })
 
   describe('排序互斥', () => {

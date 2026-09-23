@@ -48,20 +48,28 @@ pub fn ensure_database_dir_exists(app: &AppHandle) -> Result<PathBuf, String> {
 
 /// 解析音乐文件夹（唯一真源：DB 设置 `music_folder`）
 ///
-/// - DB 中有非空且实际存在的路径 → 直接使用
-/// - 否则回退到默认目录 [`get_default_music_folder_path`]（自动创建）并写回 DB
+/// - DB 中有非空路径 → **原样返回**（不判断路径是否存在，见下方说明）
+/// - 否则（缺失/为空）→ 回退到默认目录 [`get_default_music_folder_path`]（自动创建）并写回 DB
 ///
-/// 所有需要「音乐文件夹」的后端逻辑都必须走此函数，
-/// 否则会出现「写入用硬编码目录、校验用 DB 目录」的不一致，
-/// 导致二级文件夹符号链接建在错误目录、路径白名单失效。
+/// # 为什么「路径不存在」不回退
+///
+/// 外接盘/网络盘未挂载、或目录被临时改名时，`Path::exists()` 同样返回 `false`。
+/// 若此时回退到默认目录并写回 DB，会把用户配置的音乐文件夹**永久覆盖**成
+/// `app_data/jmusic-file` 这个空目录 —— 曲库看起来「凭空消失」，原配置不可恢复。
+/// 因此这里只把「设置为空/缺失」当作未配置；路径暂时不可达时原样返回，
+/// 由调用方自行 `exists()` 判断并决定是否跳过（如启动扫描）。
+///
+/// 注意：校验路径的 [`crate::commands::common::get_music_folder_and_targets`]
+/// 必须与本函数对「已配置」的取值保持一致（都返回 DB 原值），否则会出现
+/// 「界面显示的目录」与「校验用的目录」不一致。
 pub async fn resolve_music_folder(
     app: &AppHandle,
     db: &crate::database::Database,
 ) -> Result<PathBuf, String> {
-    if let Ok(Some(folder)) = db.get_setting("music_folder").await {
-        if !folder.is_empty() && std::path::Path::new(&folder).exists() {
-            return Ok(PathBuf::from(folder));
-        }
+    match db.get_setting("music_folder").await {
+        Ok(Some(folder)) if !folder.trim().is_empty() => return Ok(PathBuf::from(folder)),
+        Ok(_) => {}
+        Err(e) => return Err(format!("读取 music_folder 设置失败: {}", e)),
     }
 
     let default_folder = get_default_music_folder_path(app)?;

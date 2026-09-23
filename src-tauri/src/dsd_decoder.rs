@@ -27,11 +27,30 @@ pub enum DsdDecoderError {
     UnknownSampleRate,
     #[error("Unknown frame count")]
     UnknownFrameCount,
+    #[error("Unsupported DSD sample rate: {0} Hz")]
+    UnsupportedDsdSampleRate(u32),
     #[error("Unsupported channel configuration")]
     UnsupportedChannelConfiguration,
     #[error("Frame index overflow")]
     FrameIndexOverflow,
 }
+
+/// DSD → PCM 抽取后的输出采样率。
+///
+/// **为什么必须显式设置**：fork 的 DsdDecoder 有 PassThrough（默认）与 PCM 两种模式。
+/// PassThrough 原样输出 1-bit DSD 字节（`AudioBuffer<u8>`），只适合支持原生 DSD 的声卡；
+/// 必须通过 `CodecParameters::extra_data` 的前 4 字节（小端 u32）请求 PCM 输出率，
+/// 才会启用 CIC + FIR 抽取（见 symphonia-codec-dsd 的 README「PCM Conversion Mode」）。
+///
+/// **不设置的实际后果**：本模块会把每个**字节**当成一个 8-bit PCM 采样转成 f32 帧，
+/// 而 `sample_rate()` 返回的是 DSD 比特率（DSD64 = 2.8224MHz）→ kira 按比特率消费
+/// 这些字节帧，播放速度变成 **8 倍**，且没有抽取低通 → 输出是刺耳噪声。
+///
+/// **为什么选 88.2kHz**：fork 的 `choose_decimation_ratios` 显式实现了 32 / 64 / 128 / 256
+/// 四档抽取比，对应 DSD64 / DSD128 / DSD256 / DSD512 → 88.2kHz 全部命中已实现分支
+/// （README 的支持列表也覆盖这四档）。而 176.4kHz 在 DSD64 下需要 16 倍抽取，
+/// 只落在通用回退分支里，不在文档列出的支持集内。
+const DSD_PCM_OUTPUT_RATE: u32 = 88_200;
 
 /// 使用项目已有的 symphonia 0.6.0 (M0Rf30 fork dsd-support 分支) 实现 kira Decoder trait。
 ///
@@ -72,26 +91,53 @@ impl DsdDecoder {
             .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
             .ok_or(DsdDecoderError::NoAudioTrack)?;
 
-        let sample_rate = track
+        let input_rate = track
             .codec_params
             .sample_rate
             .ok_or(DsdDecoderError::UnknownSampleRate)?;
-        let num_frames = track
+        let input_frames = track
             .codec_params
             .n_frames
-            .ok_or(DsdDecoderError::UnknownFrameCount)?
-            .try_into()
-            .map_err(|_| DsdDecoderError::FrameIndexOverflow)?;
+            .ok_or(DsdDecoderError::UnknownFrameCount)?;
         let track_id = track.id;
 
-        let decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &DecoderOptions::default())?;
+        // 只有 DSD 轨道才改写 extra_data：其他格式的 extra_data 是解码器必需的私有
+        // 初始化数据（如 AAC 的 AudioSpecificConfig），覆盖会破坏解码。
+        let mut decoder_params = track.codec_params.clone();
+        let is_dsd = track.codec_params.codec == symphonia::default::formats::CODEC_TYPE_DSD;
+        let (sample_rate, num_frames) = if is_dsd {
+            // 抽取比必须 ≥ 2 且能整除，否则 fork 的 DecimationConfig 会直接报错。
+            // 与其让它以错误终止，不如在这里给出明确原因。
+            if input_rate < DSD_PCM_OUTPUT_RATE * 2 || input_rate % DSD_PCM_OUTPUT_RATE != 0 {
+                return Err(DsdDecoderError::UnsupportedDsdSampleRate(input_rate));
+            }
+            let total_decimation = (input_rate / DSD_PCM_OUTPUT_RATE) as u64;
+
+            decoder_params.extra_data = Some(
+                DSD_PCM_OUTPUT_RATE
+                    .to_le_bytes()
+                    .to_vec()
+                    .into_boxed_slice(),
+            );
+
+            // n_frames 由 format-dsd 按 DSD 比特率给出（dff: bytes × 8 ÷ channels，
+            // dsf: sample_count），抽取后帧数按抽取比缩小 —— 与 fork 内部对
+            // output_params.n_frames 的处理保持一致。若不缩小，kira 算出的时长会短 8~256 倍。
+            (DSD_PCM_OUTPUT_RATE, input_frames / total_decimation)
+        } else {
+            (input_rate, input_frames)
+        };
+
+        let decoder =
+            symphonia::default::get_codecs().make(&decoder_params, &DecoderOptions::default())?;
 
         Ok(Self {
             format_reader,
             decoder,
             sample_rate,
-            num_frames,
+            num_frames: num_frames
+                .try_into()
+                .map_err(|_| DsdDecoderError::FrameIndexOverflow)?,
             track_id,
         })
     }
@@ -159,6 +205,8 @@ fn frames_from_buffer_ref(buffer: &AudioBufferRef) -> Option<Vec<Frame>> {
 
 fn frames_from_buffer<S: Sample + IntoSample<f32>>(buffer: &AudioBuffer<S>) -> Option<Vec<Frame>> {
     match buffer.spec().channels.count() {
+        // 声道数为 0 才是真正的无效数据。
+        0 => None,
         1 => Some(
             buffer
                 .chan(0)
@@ -166,7 +214,12 @@ fn frames_from_buffer<S: Sample + IntoSample<f32>>(buffer: &AudioBuffer<S>) -> O
                 .map(|s| Frame::from_mono((*s).into_sample()))
                 .collect(),
         ),
-        2 => Some(
+        // 2 声道直接作为 L/R。
+        // 3+ 声道（如 5.1 FLAC）有意简化为「取前两个声道作为 L/R」的下混，不做
+        // center/LFE 加权：本播放器只输出立体声，加权收益有限且会改变已正确混音
+        // 内容的听感。symphonia 的 `chan(i)` 仅在 `i >= 声道数` 时 assert，此分支
+        // 已保证 `count() >= 2`，故 `chan(0)`/`chan(1)` 不会 panic。
+        _ => Some(
             buffer
                 .chan(0)
                 .iter()
@@ -174,7 +227,6 @@ fn frames_from_buffer<S: Sample + IntoSample<f32>>(buffer: &AudioBuffer<S>) -> O
                 .map(|(l, r)| Frame::new((*l).into_sample(), (*r).into_sample()))
                 .collect(),
         ),
-        _ => None,
     }
 }
 
@@ -213,34 +265,55 @@ mod tests {
         }
     }
 
-    /// 生成一个最小的有效 WAV 文件（单声道，44100Hz，16-bit，0.1 秒静音）。
-    fn create_test_wav() -> tempfile::NamedTempFile {
+    /// 生成一个最小的有效 WAV 文件（44100Hz，16-bit，0.1 秒静音），`channels` 为声道数。
+    ///
+    /// 声道数 > 2 时写 WAVEFORMATEXTENSIBLE（fmt 块 40 字节，含 5.1 channel mask）；
+    /// 单/双声道沿用普通 PCM fmt（16 字节），保持既有测试用例语义不变。
+    fn create_test_wav(channels: u16) -> tempfile::NamedTempFile {
         use std::io::Write;
-        let sample_rate: u32 = 44100;
-        let duration_secs = 0.1;
-        let num_samples = (sample_rate as f64 * duration_secs) as u32;
-        let data_size = num_samples * 2; // 16-bit = 2 bytes per sample
-        let file_size = 36 + data_size; // RIFF header (12) + fmt chunk (24) + data chunk header (8)
+        const SAMPLE_RATE: u32 = 44_100;
+        const BITS_PER_SAMPLE: u16 = 16;
 
-        let mut buf = Vec::with_capacity(44 + data_size as usize);
+        let num_frames = (SAMPLE_RATE as f64 * 0.1) as u32;
+        let block_align: u16 = channels * (BITS_PER_SAMPLE / 8);
+        let byte_rate: u32 = SAMPLE_RATE * block_align as u32;
+        let data_size: u32 = num_frames * block_align as u32;
+
+        let extensible = channels > 2;
+        let fmt_size: u32 = if extensible { 40 } else { 16 };
+        // "WAVE"(4) + fmt 头(8)+fmt_size + data 头(8) + data_size，再减去 RIFF 自身 8 字节
+        let file_size: u32 = 20 + fmt_size + data_size;
+
+        let mut buf = Vec::with_capacity((file_size + 8) as usize);
         // RIFF header
         buf.extend_from_slice(b"RIFF");
         buf.extend_from_slice(&file_size.to_le_bytes());
         buf.extend_from_slice(b"WAVE");
         // fmt chunk
         buf.extend_from_slice(b"fmt ");
-        buf.extend_from_slice(&16u32.to_le_bytes()); // chunk size
-        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM format
-        buf.extend_from_slice(&1u16.to_le_bytes()); // mono
-        buf.extend_from_slice(&sample_rate.to_le_bytes());
-        buf.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
-        buf.extend_from_slice(&2u16.to_le_bytes()); // block align
-        buf.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-                                                     // data chunk
+        buf.extend_from_slice(&fmt_size.to_le_bytes());
+        buf.extend_from_slice(&if extensible { 0xFFFEu16 } else { 1u16 }.to_le_bytes()); // PCM / EXTENSIBLE
+        buf.extend_from_slice(&channels.to_le_bytes());
+        buf.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&BITS_PER_SAMPLE.to_le_bytes()); // bits per sample
+        if extensible {
+            // WAVEFORMATEXTENSIBLE 扩展：extra size=22、valid bits、channel mask、sub format GUID
+            buf.extend_from_slice(&22u16.to_le_bytes());
+            buf.extend_from_slice(&BITS_PER_SAMPLE.to_le_bytes()); // valid bits per sample
+            buf.extend_from_slice(&0x3Fu32.to_le_bytes()); // 5.1: FL|FR|FC|LFE|RL|RR
+                                                           // KSDATAFORMAT_SUBTYPE_PCM
+            buf.extend_from_slice(&[
+                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38,
+                0x9B, 0x71,
+            ]);
+        }
+        // data chunk
         buf.extend_from_slice(b"data");
         buf.extend_from_slice(&data_size.to_le_bytes());
         // 静音数据（全 0）
-        buf.resize(44 + data_size as usize, 0);
+        buf.resize(buf.len() + data_size as usize, 0);
 
         let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
         tmp.write_all(&buf).expect("failed to write wav");
@@ -250,7 +323,7 @@ mod tests {
 
     #[test]
     fn dsd_decoder_opens_wav_and_decodes() {
-        let wav = create_test_wav();
+        let wav = create_test_wav(1);
         let path = wav.path().to_str().expect("non-utf8 temp path");
 
         let mut decoder = DsdDecoder::new(path).expect("failed to open wav");
@@ -263,8 +336,106 @@ mod tests {
     }
 
     #[test]
+    fn dsd_decoder_downmixes_surround_wav_to_stereo() {
+        // 回归：>2 声道（5.1）此前走 `_ => None` → decode 返回
+        // UnsupportedChannelConfiguration → kira 置 encountered_error/mark_as_stopped →
+        // 轮询误判为「正常结束」→ 前端 0 秒跳过下一首且播放次数 +1。
+        // 现在应下混为立体声正常解码，且帧数与单声道一致。
+        let mono = create_test_wav(1);
+        let mut mono_decoder = DsdDecoder::new(mono.path().to_str().expect("non-utf8 temp path"))
+            .expect("failed to open mono wav");
+        let mono_frames = mono_decoder.decode().expect("mono decode failed");
+        assert!(!mono_frames.is_empty());
+
+        let wav = create_test_wav(6);
+        let mut decoder = DsdDecoder::new(wav.path().to_str().expect("non-utf8 temp path"))
+            .expect("failed to open 5.1 wav");
+        let frames = decoder
+            .decode()
+            .expect("5.1 decode should downmix, not fail");
+
+        assert!(!frames.is_empty(), "5.1 decode returned empty frame list");
+        assert_eq!(frames.len(), mono_frames.len(), "下混后帧数应与单声道一致");
+    }
+
+    /// 生成一个最小的有效 DSF 文件（DSD64 立体声，2 个 block）。
+    ///
+    /// 用于回归「DSD 必须走 PCM 抽取模式」：PassThrough 模式下 decoder 报告的
+    /// sample_rate 会是 DSD 比特率（2822400）而非抽取后的 88200。
+    fn create_test_dsf() -> tempfile::NamedTempFile {
+        use std::io::Write;
+
+        const BLOCK_SIZE_PER_CHANNEL: u32 = 4096;
+        const CHANNELS: u32 = 2;
+        const DSD_RATE: u32 = 2_822_400; // DSD64
+        const BLOCKS: u64 = 2;
+
+        let block_size = (BLOCK_SIZE_PER_CHANNEL * CHANNELS) as u64; // 每 block 总字节数
+        let data_size = block_size * BLOCKS;
+        // DSF 的 sample_count 是「每声道 DSD 采样数」，即 bit 数
+        let sample_count = data_size * 8 / CHANNELS as u64;
+        let file_size = 28 + 52 + 12 + data_size;
+
+        let mut buf = Vec::new();
+        // DSD chunk (28 bytes)
+        buf.extend_from_slice(b"DSD ");
+        buf.extend_from_slice(&28u64.to_le_bytes());
+        buf.extend_from_slice(&file_size.to_le_bytes());
+        buf.extend_from_slice(&0u64.to_le_bytes()); // metadata pointer = 0
+                                                    // fmt chunk (52 bytes)
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&52u64.to_le_bytes());
+        buf.extend_from_slice(&1u32.to_le_bytes()); // format version
+        buf.extend_from_slice(&0u32.to_le_bytes()); // format id = DSD Raw
+        buf.extend_from_slice(&CHANNELS.to_le_bytes()); // channel type
+        buf.extend_from_slice(&CHANNELS.to_le_bytes()); // channel num
+        buf.extend_from_slice(&DSD_RATE.to_le_bytes());
+        buf.extend_from_slice(&1u32.to_le_bytes()); // bits per sample
+        buf.extend_from_slice(&sample_count.to_le_bytes());
+        buf.extend_from_slice(&BLOCK_SIZE_PER_CHANNEL.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes()); // reserved
+                                                    // data chunk
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&(12 + data_size).to_le_bytes());
+        // 0xAA = 交替位流，比全 0 更接近真实 DSD 数据
+        buf.resize(buf.len() + data_size as usize, 0xAA);
+
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".dsf")
+            .tempfile()
+            .expect("failed to create temp file");
+        tmp.write_all(&buf).expect("failed to write dsf");
+        tmp.flush().expect("failed to flush");
+        tmp
+    }
+
+    #[test]
+    fn dsd_file_decodes_as_pcm_not_passthrough() {
+        // 回归：未设置 extra_data 时 fork 走 PassThrough，sample_rate 会报 DSD 比特率
+        // （2822400），本模块再把每个字节当 8-bit PCM 采样 → 8 倍速 + 刺耳噪声。
+        let dsf = create_test_dsf();
+        let path = dsf.path().to_str().expect("non-utf8 temp path");
+
+        let mut decoder = DsdDecoder::new(path).expect("failed to open dsf");
+
+        assert_eq!(
+            decoder.sample_rate(),
+            DSD_PCM_OUTPUT_RATE,
+            "DSD 必须走 PCM 抽取模式；报 2822400 说明退回了 PassThrough（8 倍速 + 噪声）"
+        );
+
+        // num_frames 必须按抽取比缩小：每声道 DSD 采样数 ÷ (2822400 / 88200) = ÷32
+        let per_channel_samples = 2 * 4096 * 2 * 8 / 2; // 65536
+        assert_eq!(decoder.num_frames(), per_channel_samples / 32); // 2048
+
+        // PCM 模式下 decode 返回 F32 buffer，单 packet = 4096 字节/声道 → 32768 bit → ÷32
+        let frames = decoder.decode().expect("decode failed");
+        assert_eq!(frames.len(), 1024, "每 block 抽取后应为 1024 帧");
+    }
+
+    #[test]
     fn dsd_decoder_seek_returns_valid_index() {
-        let wav = create_test_wav();
+        let wav = create_test_wav(1);
         let path = wav.path().to_str().expect("non-utf8 temp path");
 
         let mut decoder = DsdDecoder::new(path).expect("failed to open wav");
@@ -283,7 +454,7 @@ mod tests {
     fn kira_streaming_sound_data_accepts_dsd_decoder() {
         use kira::sound::streaming::StreamingSoundData;
 
-        let wav = create_test_wav();
+        let wav = create_test_wav(1);
         let path = wav.path().to_str().expect("non-utf8 temp path");
 
         let decoder = DsdDecoder::new(path).expect("failed to open wav");

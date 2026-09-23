@@ -5,7 +5,12 @@ import { mutex } from 'async-mutex-lite'
 import { colord } from 'colord'
 import api from '../api'
 import { usePlayerStore } from './playerStore'
-import { coverCache, getPendingCoverRequest } from '../hooks/useSongCover'
+import {
+  getCachedCover,
+  setCachedCover,
+  clearCoverCache,
+  getPendingCoverRequest,
+} from '../hooks/useSongCover'
 
 export interface AlbumColors {
   lyrics: string | null
@@ -98,7 +103,8 @@ async function loadCoverAndColors(path: string | null) {
   }
 
   // 同步设置 path + 命中缓存的 cover/colors（避免切歌瞬间闪烁旧色）
-  const cachedCover = coverCache.get(path) ?? null
+  // 用 large 尺寸：播放器封面与背景取色需要 200px 的图（列表行内用的是 56px）
+  const cachedCover = getCachedCover(path, 'large') ?? null
   const cachedColors = colorCache.get(path) ?? NULL_COLORS
   useCoverStore.setState({
     path,
@@ -110,15 +116,15 @@ async function loadCoverAndColors(path: string | null) {
   // 异步加载 cover（若未命中缓存）
   let cover = cachedCover
   if (!cover) {
-    // #10 修复：先检查 useSongCover 是否已有 in-flight 请求，避免双倍请求
-    const pending = getPendingCoverRequest(path)
+    // #10 修复：先检查是否已有同一尺寸的 in-flight 请求，避免双倍请求
+    const pending = getPendingCoverRequest(path, 'large')
     try {
       cover = pending ? await pending : await api.getSongCoverLarge(path)
     } catch {
       cover = null
     }
     // #5 修复：先入缓存再判断是否丢弃，避免 A→B→A 时重复请求
-    if (cover) coverCache.set(path, cover)
+    if (cover) setCachedCover(path, 'large', cover)
     // 路径已变化，放弃结果（不 setState，但封面已入缓存供下次命中）
     if (loadingPath !== path) return
     useCoverStore.setState({ cover, isLoading: false })
@@ -152,7 +158,7 @@ export function initCoverStore() {
 }
 
 export function clearCoverStoreCache() {
-  coverCache.clear()
+  clearCoverCache()
   colorCache.clear()
   // #2 修复：重置 path，否则 loadCoverAndColors 开头的 path===path 检查会跳过重载
   useCoverStore.setState({ path: null, cover: null, colors: NULL_COLORS, isLoading: false })

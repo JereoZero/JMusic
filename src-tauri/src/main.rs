@@ -109,95 +109,23 @@ fn main() {
                 if std::path::Path::new(&music_folder).exists() {
                     info!("Auto-scanning music folder: {}", music_folder);
 
-                    // 1. 清理不存在的歌曲
-                    match db.cleanup_nonexistent_songs().await {
-                        Ok(removed) => {
-                            if removed > 0 {
-                                info!("Removed {} non-existent songs", removed);
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to cleanup non-existent songs: {}", e);
-                        }
-                    }
-
-                    // 2. 扫描新歌曲（增量：跳过 mtime 未变的文件）
-                    let existing_mtimes = db.get_all_song_mtimes().await.unwrap_or_else(|e| {
-                        tracing::warn!(
-                            "Failed to load existing mtimes, falling back to full scan: {}",
-                            e
-                        );
-                        Default::default()
-                    });
-                    let scanner = scanner::FolderScanner::new();
-                    match scanner
-                        .scan(&music_folder, &existing_mtimes, app_handle.clone())
-                        .await
+                    // 与设置页的「重新扫描」共用同一份实现（清理 → 扫描 → 落库 →
+                    // 回收缩略图 → 广播 scan_complete），避免两条路径再次分叉。
+                    match scanner::scan_and_persist(
+                        &db,
+                        &music_folder,
+                        scanner::CleanupScope::Global,
+                        &app_handle,
+                    )
+                    .await
                     {
-                        Ok(mut result) => {
-                            info!(
-                                "Scan completed. Normal: {}, Encrypted: {}",
-                                result.normal_songs.len(),
-                                result.encrypted_songs.len()
-                            );
-
-                            // 3. 保存正常歌曲到数据库
-                            if !result.normal_songs.is_empty() {
-                                match db.upsert_songs(result.normal_songs).await {
-                                    Ok((inserted, errors)) => {
-                                        info!(
-                                            "Saved {} normal songs to database ({}) errors",
-                                            inserted, errors
-                                        );
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to save normal songs: {}", e);
-                                    }
-                                }
-                            }
-
-                            // 4. 保存加密歌曲到数据库并自动隐藏
-                            if !result.encrypted_songs.is_empty() {
-                                // 先提取 paths，避免 clone 整个 Vec<Song>
-                                let encrypted_paths: Vec<String> = result
-                                    .encrypted_songs
-                                    .iter()
-                                    .map(|s| s.path.clone())
-                                    .collect();
-                                match db
-                                    .upsert_songs(std::mem::take(&mut result.encrypted_songs))
-                                    .await
-                                {
-                                    Ok((inserted, errors)) => {
-                                        info!(
-                                            "Saved {} encrypted songs to database ({}) errors",
-                                            inserted, errors
-                                        );
-
-                                        match db.hide_songs_batch(encrypted_paths, true).await {
-                                            Ok(hidden_count) => {
-                                                info!(
-                                                    "Auto-hidden {} encrypted songs",
-                                                    hidden_count
-                                                );
-                                            }
-                                            Err(e) => {
-                                                error!(
-                                                    "Failed to auto-hide encrypted songs: {}",
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to save encrypted songs: {}", e);
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to scan default music folder: {}", e);
-                        }
+                        Ok(result) => info!(
+                            "Scan completed. Normal: {}, Encrypted: {}, Skipped: {}",
+                            result.normal_songs.len(),
+                            result.encrypted_songs.len(),
+                            result.skipped
+                        ),
+                        Err(e) => error!("Failed to scan default music folder: {}", e),
                     }
                 } else {
                     warn!("Music folder does not exist: {}", music_folder);

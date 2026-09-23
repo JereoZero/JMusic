@@ -132,13 +132,19 @@ export function useSongSort<T extends SortableItem>(
     setAlbumSort('default')
   }, [likeSort, setLikeSort, setTitleSort, setAlbumSort])
 
+  // 「喜欢优先」档位才需要 likedPaths。把它收窄成条件依赖：
+  // 默认档（大多数时候）下点赞不会让 sortedItems 重建 —— 否则每次点赞都会
+  // 产生新数组引用，导致所有可见行重渲染，并且下游 SongList 会在
+  // `songs` 引用变化时清空多选（用户先多选再点爱心，选择会被莫名清掉）。
+  const effectiveLikedPaths = likeSort === 'default' ? null : likedPaths
+
   const sortedItems = useMemo(() => {
     const result = [...items]
 
-    if (likeSort !== 'default' && likedPaths) {
+    if (likeSort !== 'default' && effectiveLikedPaths) {
       result.sort((a, b) => {
-        const aLiked = likedPaths.has(a.path) ? 1 : 0
-        const bLiked = likedPaths.has(b.path) ? 1 : 0
+        const aLiked = effectiveLikedPaths.has(a.path) ? 1 : 0
+        const bLiked = effectiveLikedPaths.has(b.path) ? 1 : 0
         return likeSort === 'liked-first' ? bLiked - aLiked : aLiked - bLiked
       })
     }
@@ -177,7 +183,7 @@ export function useSongSort<T extends SortableItem>(
     }
 
     return result
-  }, [items, titleSort, albumSort, likeSort, likedPaths])
+  }, [items, titleSort, albumSort, likeSort, effectiveLikedPaths])
 
   return {
     sortedItems,

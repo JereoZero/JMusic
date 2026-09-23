@@ -71,12 +71,12 @@ pub async fn hide_songs_batch(
     // 同时获取二级文件夹符号链接目标，用于安全校验
     let valid_paths: Vec<String> = tokio::task::spawn_blocking(move || {
         let secondary_targets = crate::path_validator::get_secondary_targets(&music_folder);
-        paths
-            .into_iter()
-            .filter(|p| {
-                crate::path_validator::is_path_in_music_folder(p, &music_folder, &secondary_targets)
-            })
-            .collect()
+        // 用批量变体：music_folder 只 canonicalize 一次，而不是每个路径各一次
+        crate::path_validator::filter_paths_in_music_folder(
+            &paths,
+            &music_folder,
+            &secondary_targets,
+        )
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -112,12 +112,12 @@ pub async fn unhide_songs_batch(
     // 同时获取二级文件夹符号链接目标，用于安全校验
     let valid_paths: Vec<String> = tokio::task::spawn_blocking(move || {
         let secondary_targets = crate::path_validator::get_secondary_targets(&music_folder);
-        paths
-            .into_iter()
-            .filter(|p| {
-                crate::path_validator::is_path_in_music_folder(p, &music_folder, &secondary_targets)
-            })
-            .collect()
+        // 用批量变体：music_folder 只 canonicalize 一次，而不是每个路径各一次
+        crate::path_validator::filter_paths_in_music_folder(
+            &paths,
+            &music_folder,
+            &secondary_targets,
+        )
     })
     .await
     .map_err(|e| e.to_string())?;

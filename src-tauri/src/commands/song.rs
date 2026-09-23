@@ -8,7 +8,6 @@ use super::common::{
 };
 use crate::database::Database;
 use crate::database::Song;
-use crate::scanner::FolderScanner;
 
 #[tauri::command]
 pub async fn get_songs(db: State<'_, Database>) -> Result<ApiResponse<Vec<Song>>, String> {
@@ -254,22 +253,17 @@ pub async fn get_song_covers_batch(
     let secondary_targets_clone = secondary_targets.clone();
     let paths_for_check = paths.clone();
     let (valid_paths, cached) = tokio::task::spawn_blocking(move || {
-        let mut valid: Vec<String> = Vec::new();
         let mut cached: HashMap<String, String> = HashMap::new();
-        for path in &paths_for_check {
-            if crate::path_validator::is_path_in_music_folder(
-                path,
-                &music_folder_clone,
-                &secondary_targets_clone,
-            ) {
-                valid.push(path.clone());
-                if crate::thumbnail::thumbnail_exists(path, THUMBNAIL_SMALL_SIZE) {
-                    if let Some(b64) =
-                        crate::thumbnail::get_thumbnail_base64(path, THUMBNAIL_SMALL_SIZE)
-                    {
-                        cached.insert(path.clone(), b64);
-                    }
-                }
+        // 批量校验：music_folder 只 canonicalize 一次，而不是每个路径各一次
+        let valid = crate::path_validator::filter_paths_in_music_folder(
+            &paths_for_check,
+            &music_folder_clone,
+            &secondary_targets_clone,
+        );
+        for path in &valid {
+            // 缓存命中即读；未命中返回 None，无需先 exists 再读（那会重复解析路径）
+            if let Some(b64) = crate::thumbnail::get_thumbnail_base64(path, THUMBNAIL_SMALL_SIZE) {
+                cached.insert(path.clone(), b64);
             }
         }
         (valid, cached)
@@ -411,9 +405,9 @@ pub async fn scan_folder(
         Err(e) => return Ok(ApiResponse::err(e)),
     };
 
-    // 清理不存在的歌曲：扫描主文件夹时全局清理，扫描子文件夹时仅清理该文件夹范围
-    // 避免扫描子文件夹时误删其他文件夹（如未挂载的外部盘）的歌曲
-    // 用 canonicalize 比较，避免尾斜杠 / symlink 形式差异导致误判
+    // 清理范围：扫描主文件夹时全局清理，扫描子文件夹时仅清理该文件夹范围，
+    // 避免扫描子文件夹时误删其他文件夹（如未挂载的外部盘）的歌曲。
+    // 用 canonicalize 比较，避免尾斜杠 / symlink 形式差异导致误判。
     let is_primary_folder = tokio::task::spawn_blocking({
         let music_folder = music_folder.clone();
         let path = path.clone();
@@ -426,95 +420,14 @@ pub async fn scan_folder(
     .await
     .unwrap_or(false);
 
-    let cleanup_result = if is_primary_folder {
-        db.cleanup_nonexistent_songs().await
+    // 与启动扫描共用同一份「清理 → 扫描 → 落库 → 回收缩略图 → 广播」实现
+    let scope = if is_primary_folder {
+        crate::scanner::CleanupScope::Global
     } else {
-        db.cleanup_nonexistent_songs_in_folder(&path).await
+        crate::scanner::CleanupScope::Folder
     };
-
-    match cleanup_result {
-        Ok(removed) => {
-            tracing::info!("Removed {} non-existent songs", removed);
-        }
-        Err(e) => {
-            tracing::error!("Failed to cleanup non-existent songs: {}", e);
-        }
-    }
-
-    let scanner = FolderScanner::new();
-    // 获取已存储的 file_mtime 用于增量扫描（跳过未变文件）
-    let existing_mtimes = db.get_all_song_mtimes().await.unwrap_or_else(|e| {
-        tracing::warn!(
-            "Failed to load existing mtimes, falling back to full scan: {}",
-            e
-        );
-        Default::default()
-    });
-    match scanner.scan(&path, &existing_mtimes, app_handle).await {
-        Ok(mut result) => {
-            if !result.normal_songs.is_empty() {
-                match db
-                    .upsert_songs(std::mem::take(&mut result.normal_songs))
-                    .await
-                {
-                    Ok((success, errors)) => {
-                        if errors > 0 {
-                            tracing::warn!("{} normal songs failed to insert", errors);
-                        }
-                        tracing::info!("Saved {} normal songs, {} errors", success, errors);
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to save normal songs: {}", e);
-                    }
-                }
-            }
-
-            if !result.encrypted_songs.is_empty() {
-                // 先提取 paths，避免 clone 整个 Vec<Song>
-                let encrypted_paths: Vec<String> = result
-                    .encrypted_songs
-                    .iter()
-                    .map(|s| s.path.clone())
-                    .collect();
-                match db
-                    .upsert_songs(std::mem::take(&mut result.encrypted_songs))
-                    .await
-                {
-                    Ok((success, errors)) => {
-                        if success > 0 {
-                            if let Err(e) = db.hide_songs_batch(encrypted_paths, true).await {
-                                tracing::error!("Failed to auto-hide encrypted songs: {}", e);
-                            }
-                        }
-                        if errors > 0 {
-                            tracing::warn!("{} encrypted songs failed to insert", errors);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to save encrypted songs: {}", e);
-                    }
-                }
-            }
-
-            // 扫描后回收孤儿缩略图：歌曲被移出曲库（删除记录 / 更换音乐文件夹）后，
-            // 其缩略图缓存没有任何清理路径，会随每次库变更持续累积占用磁盘。
-            // 取数失败时跳过，避免误删整个缓存（cleanup 内部对空列表也会跳过）。
-            match db.get_all_song_mtimes().await {
-                Ok(mtimes) => {
-                    let valid_paths: Vec<String> = mtimes.into_keys().collect();
-                    if let Err(e) = tokio::task::spawn_blocking(move || {
-                        crate::thumbnail::cleanup_orphan_thumbnails(&valid_paths)
-                    })
-                    .await
-                    {
-                        tracing::warn!("Orphan thumbnail cleanup task failed: {}", e);
-                    }
-                }
-                Err(e) => tracing::warn!("Skipping orphan thumbnail cleanup: {}", e),
-            }
-
-            Ok(ApiResponse::ok(result))
-        }
+    match crate::scanner::scan_and_persist(&db, &path, scope, &app_handle).await {
+        Ok(result) => Ok(ApiResponse::ok(result)),
         Err(e) => Ok(ApiResponse::err(e.to_string())),
     }
 }

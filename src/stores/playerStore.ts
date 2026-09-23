@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import type { Song } from '../types'
 import * as api from '../api/modules'
 import { usePlayQueueStore, usePlayerSettingsStore, QueueSource } from './playQueueStore'
+import { useLibraryStore } from './libraryStore'
 import { debounce } from 'es-toolkit'
 import { mutex } from 'async-mutex-lite'
 import { useOperationLogStore } from './operationLogStore'
@@ -65,6 +66,43 @@ let playOperationId = 0
 let seekOpId = 0
 let backendLoaded = false
 
+// 冷启动整库加载的共享 Promise：App 的初始 loadData 发起 fetchSongs 时登记，
+// restoreLastSong 需要整库数据时 await 同一个请求，避免「App 拉一遍 + 兜底再拉一遍」
+// 把整库重复拉取（库越大越明显）。
+let libraryLoadPromise: Promise<unknown> | null = null
+
+/**
+ * 登记 App 启动时的整库加载 Promise（fetchSongs/liked/hidden 的 Promise.all）。
+ * 仅由 App 调用；restoreLastSong 会复用同一请求而不是重复调用 api.getSongs()。
+ */
+export function trackInitialLibraryLoad<T>(promise: Promise<T>): Promise<T> {
+  libraryLoadPromise = promise
+  return promise
+}
+
+/**
+ * 为 restoreLastSong 获取整库歌曲数据，优先复用 libraryStore 以避免重复 api.getSongs()：
+ * - 已有数据 → 直接复用，零请求；
+ * - 数据为空但有 App 登记的整库加载 Promise → await 同一请求后再读，既不会把
+ *   「首次加载尚未完成」误判成「曲库为空」，也不会额外发请求；
+ * - 无在途加载（单测/异常路径）或整库加载失败 → 直连 api.getSongs() 兜底，保证数据可用。
+ */
+async function getSongsForRestore(): Promise<Song[]> {
+  const cached = useLibraryStore.getState().songs
+  if (cached.length > 0) return cached
+  if (libraryLoadPromise) {
+    try {
+      await libraryLoadPromise
+    } catch (e) {
+      log('整库加载失败', e instanceof Error ? e.message : String(e))
+    }
+    const state = useLibraryStore.getState()
+    // 加载成功（含已确认的空库）→ 复用其结果；加载失败（error 仍在）→ 落回直连兜底
+    if (state.songs.length > 0 || !state.error) return state.songs
+  }
+  return api.getSongs()
+}
+
 function resetModuleState() {
   stopProgressTimer()
   eventUnlistenPromises.forEach((p) => {
@@ -77,6 +115,7 @@ function resetModuleState() {
   playOperationId = 0
   seekOpId = 0
   backendLoaded = false
+  libraryLoadPromise = null
   lastUpdateTime = 0
   lastBackendSyncTime = 0
   debouncedSetVolume.cancel()
@@ -477,7 +516,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
         const lastSong = await api.getLastPlayedSong()
         if (!isStillInitial()) return // 用户已开始播放，放弃恢复
         if (lastSong) {
-          const songs = await api.getSongs()
+          const songs = await getSongsForRestore()
           if (!isStillInitial()) return // 用户已开始播放，放弃恢复
           const songIndex = songs.findIndex((s) => s.path === lastSong.path)
           if (songIndex >= 0) {
@@ -510,12 +549,15 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
         songs = likedSongs
         source = 'liked'
       } else if (queueSource === 'hidden') {
-        const [allSongs, hiddenPaths] = await Promise.all([api.getSongs(), api.getHiddenPaths()])
+        const [allSongs, hiddenPaths] = await Promise.all([
+          getSongsForRestore(),
+          api.getHiddenPaths(),
+        ])
         const hiddenSet = new Set(hiddenPaths)
         songs = allSongs.filter((s) => hiddenSet.has(s.path))
         source = 'hidden'
       } else {
-        songs = await api.getSongs()
+        songs = await getSongsForRestore()
         source = 'local'
       }
 
