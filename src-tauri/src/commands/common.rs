@@ -73,14 +73,13 @@ pub async fn validate_path_in_music_folder(
 
 pub const MAX_BATCH_SIZE: usize = 100;
 
-pub const ALLOWED_SETTING_KEYS: &[&str] = &[
-    "music_folder",
-    "secondary_folders",
-    "theme",
-    "language",
-    "volume",
-    "last_scan",
-];
+/// `set_setting` 允许写入的键 —— **只保留真正有读取方的键**。
+///
+/// 曾列 6 个，但 `theme` / `language` / `volume` / `last_scan` /
+/// `secondary_folders` 全部零调用（theme 与 volume 存前端 zustand-persist、
+/// language 无 i18n、last_scan 无读取、二级文件夹是符号链接不是设置）。
+/// 白名单是外部可注入的攻击面，留死键只会扩大可写范围。
+pub const ALLOWED_SETTING_KEYS: &[&str] = &["music_folder"];
 
 pub async fn get_or_create_thumbnail(
     db: &crate::database::Database,

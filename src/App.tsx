@@ -3,8 +3,6 @@ import { Toaster, toast } from 'sonner'
 import { useHotkeys } from 'react-hotkeys-hook'
 import Sidebar from './components/Sidebar'
 import PlayerBar from './components/PlayerBar'
-import AlertDialog from './components/AlertDialog'
-import ShortcutsHelp from './components/ShortcutsHelp'
 import ErrorBoundary from './components/ErrorBoundary'
 import LikedView from './views/LikedView'
 import { APP_CONFIG } from './config'
@@ -28,6 +26,11 @@ const HiddenView = lazy(() => import('./views/HiddenView'))
 const HistoryView = lazy(() => import('./views/HistoryView'))
 const SettingsView = lazy(() => import('./views/SettingsView'))
 const LyricsView = lazy(() => import('./views/LyricsView'))
+// 弹层也懒加载：它们是 framer-motion 在首屏的唯一静态消费者，
+// 拆出后 motion-vendor（gzip 41.6KB）不再进首屏。首次打开才加载，
+// 加载后保持挂载（AnimatePresence 的退出动画依赖组件存活）
+const AlertDialog = lazy(() => import('./components/AlertDialog'))
+const ShortcutsHelp = lazy(() => import('./components/ShortcutsHelp'))
 
 // 懒加载视图的占位：沿用项目已有的居中 spinner 写法（见 LyricsView 的加载态）
 function ViewLoadingFallback() {
@@ -353,9 +356,14 @@ function AppContent() {
 
         <PlayerBar onToggleLyrics={handleToggleLyrics} />
 
-        <AlertDialog />
+        {/* 弹层懒加载：fallback 用 null 而非 spinner，避免加载瞬间闪烁加载态 */}
+        <Suspense fallback={null}>
+          <AlertDialog />
+        </Suspense>
 
-        <ShortcutsHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+        <Suspense fallback={null}>
+          <ShortcutsHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+        </Suspense>
 
         <Toaster
           position="bottom-right"

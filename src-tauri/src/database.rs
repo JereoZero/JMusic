@@ -82,6 +82,10 @@ pub enum DatabaseError {
     Migrate(#[from] sqlx::migrate::MigrateError),
 }
 
+/// 播放历史上限（轮转封顶）。前端历史视图最多展示数百条，一万条足够回溯；
+/// 超出后按 played_at 丢最旧行，防止该表随使用时长无上限膨胀。
+const PLAY_HISTORY_MAX: i64 = 10_000;
+
 /// 数据库管理器
 #[derive(Clone)]
 pub struct Database {
@@ -95,11 +99,17 @@ impl Database {
         let db_path = crate::paths::ensure_database_dir_exists(app_handle)
             .map_err(|e| DatabaseError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, e)))?;
 
-        info!("Initializing database at: {:?}", db_path);
-
         // 创建连接字符串
         let db_url = format!("sqlite:{}?mode=rwc", db_path.to_string_lossy());
-        info!("Database URL: {}", db_url);
+        // 只记录文件名而非完整 URL：完整路径会原样进日志/控制台
+        // （用户可能直接复制日志到反馈渠道，路径含用户名等敏感信息）
+        info!(
+            "Initializing database: {}",
+            db_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "music.db".to_string())
+        );
 
         // 配置连接选项：启用外键约束（确保 ON DELETE CASCADE 生效）+ WAL 模式
         // busy_timeout: 遇到锁时等待 5s 而非立即报错
@@ -453,6 +463,8 @@ impl Database {
         duration: i64,
         completed: bool,
     ) -> Result<(), DatabaseError> {
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query(
             r#"
             INSERT INTO play_history (path, duration, completed)
@@ -464,14 +476,42 @@ impl Database {
         .bind(duration)
         .bind(if completed { 1 } else { 0 })
         .bind(path)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        // 轮转：丢弃最旧记录，防止 play_history 无上限增长。
+        Self::trim_play_history(&mut tx, PLAY_HISTORY_MAX).await?;
+
+        tx.commit().await?;
 
         debug!(
             "Recorded play history: {} duration={}s completed={}",
             path, duration, completed
         );
 
+        Ok(())
+    }
+
+    /// 保留最新 `max` 条播放历史，删除更旧的。
+    ///
+    /// 按 played_at DESC + id DESC 保序（同一秒内多条靠 id 决定新旧）。
+    /// 表内记录未超上限时子查询覆盖全部行 → NOT IN 不命中任何行 → 0 删除，
+    /// 开销仅为一次索引扫描，远小于无轮转时长期膨胀的磁盘代价。
+    async fn trim_play_history(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        max: i64,
+    ) -> Result<(), DatabaseError> {
+        sqlx::query(
+            r#"
+            DELETE FROM play_history
+            WHERE id NOT IN (
+                SELECT id FROM play_history ORDER BY played_at DESC, id DESC LIMIT ?1
+            )
+            "#,
+        )
+        .bind(max)
+        .execute(&mut **tx)
+        .await?;
         Ok(())
     }
 
@@ -1414,6 +1454,63 @@ mod tests {
         song.artist = artist.to_string();
         song.album = album.to_string();
         db.upsert_songs(&[song]).await.expect("upsert failed");
+    }
+
+    // ===== 播放历史轮转 =====
+
+    #[tokio::test]
+    async fn test_trim_play_history_keeps_newest_and_respects_max() {
+        // 回归：play_history 此前无上限，每次播放插入且永不清理，
+        // 长期使用会持续膨胀。轮转必须「丢最旧、保最新、封顶」。
+        let (db, _tmp) = setup_db().await;
+        insert_song(&db, "/music/a.mp3", "A", "X", "Y").await;
+
+        for i in 0..10 {
+            db.add_play_history("/music/a.mp3", 60, true).await.unwrap();
+            // played_at 默认 CURRENT_TIMESTAMP 秒精度，同秒多条靠 id 决定新旧
+            sqlx::query("UPDATE play_history SET played_at = datetime('now', '+' || ? || ' seconds') WHERE id = (SELECT MAX(id) FROM play_history)")
+                .bind(i)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+
+        let mut tx = db.pool.begin().await.unwrap();
+        Database::trim_play_history(&mut tx, 4).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM play_history")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 4, "应封顶到 max");
+
+        // 保留的必须是最新 4 条（+9/+8/+7/+6 秒），最旧的 +0~+5 被丢弃
+        let oldest_kept: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM play_history WHERE played_at < datetime('now', '+6 seconds')",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(oldest_kept, 0, "保留的应全是最新记录，最旧的已删除");
+    }
+
+    #[tokio::test]
+    async fn test_trim_play_history_noop_when_under_max() {
+        // 未超上限时不得误删
+        let (db, _tmp) = setup_db().await;
+        insert_song(&db, "/music/a.mp3", "A", "X", "Y").await;
+        db.add_play_history("/music/a.mp3", 60, true).await.unwrap();
+
+        let mut tx = db.pool.begin().await.unwrap();
+        Database::trim_play_history(&mut tx, 100).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM play_history")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 1, "未超上限时不应删除");
     }
 
     // ===== 隐藏歌曲：计数口径与「取消隐藏」记忆 =====

@@ -317,7 +317,7 @@ impl FolderScanner {
 
         // 阶段 1：WalkDir 遍历收集候选文件路径 + mtime + size（IO 密集，单线程足够）
         let mut supported_files: Vec<(PathBuf, i64, Option<i64>)> = Vec::with_capacity(500);
-        let mut encrypted_files: Vec<(PathBuf, String)> = Vec::with_capacity(50);
+        let mut encrypted_files: Vec<(PathBuf, String, Option<i64>, i64)> = Vec::with_capacity(50);
         let mut visited: HashSet<FileId> = HashSet::new();
         let mut scanned = 0usize;
         let mut skipped = 0usize;
@@ -423,7 +423,15 @@ impl FolderScanner {
 
                     supported_files.push((path.to_path_buf(), mtime, size));
                 } else if is_encrypted || Self::is_unsupported_format(&ext_lower) {
-                    encrypted_files.push((path.to_path_buf(), ext_lower));
+                    // 复用阶段 1 那次 stat：原实现在 process_unsupported_file 里
+                    // 又 stat 一遍（加密/不支持文件每个都多一次系统调用）
+                    let file_mtime = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as i64);
+                    let file_size = metadata.len() as i64;
+                    encrypted_files.push((path.to_path_buf(), ext_lower, file_mtime, file_size));
                 }
             }
         }
@@ -482,11 +490,12 @@ impl FolderScanner {
             normal_songs.push(song);
         }
 
-        // 阶段 3：处理加密/不支持文件（轻量级，串行即可）
+        // 阶段 3：处理加密/不支持文件（轻量级，串行即可）；
+        // mtime/size 由阶段 1 的 stat 直接带下来，不再重复系统调用
         let encrypted_songs: Vec<Song> = encrypted_files
             .into_iter()
-            .filter_map(|(path, ext)| {
-                Self::process_unsupported_file(&path, &ext, is_encrypted_extension(&ext))
+            .filter_map(|(path, ext, file_mtime, file_size)| {
+                Self::process_unsupported_file(&path, &ext, file_mtime, Some(file_size))
             })
             .collect();
 
@@ -641,7 +650,12 @@ impl FolderScanner {
             || matches!(ext, "kgm" | "mgg" | "vpr" | "kwm")
     }
 
-    fn process_unsupported_file(path: &Path, ext: &str, _is_encrypted: bool) -> Option<Song> {
+    fn process_unsupported_file(
+        path: &Path,
+        ext: &str,
+        file_mtime: Option<i64>,
+        file_size: Option<i64>,
+    ) -> Option<Song> {
         // 非 UTF-8 路径无法在 DB(TEXT)/IPC(UTF-8) 中正确往返，跳过而非写入 U+FFFD 占位路径
         let path_str = path.to_str()?.to_string();
 
@@ -665,14 +679,6 @@ impl FolderScanner {
             "kwm" => "酷我加密",
             _ => "不支持",
         };
-
-        let metadata = std::fs::metadata(path).ok();
-        let file_mtime = metadata
-            .as_ref()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as i64);
-        let file_size = metadata.as_ref().map(|m| m.len() as i64);
 
         let song = Song {
             id: Uuid::new_v4().to_string(),

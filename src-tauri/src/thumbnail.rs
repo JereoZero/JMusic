@@ -4,12 +4,34 @@ use md5::compute;
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 pub const THUMBNAIL_SMALL_SIZE: u32 = 56;
 pub const THUMBNAIL_LARGE_SIZE: u32 = 200;
 
+/// 缩略图目录（进程内缓存一次解析结果）。
+///
+/// 原实现每次调用都做「读环境变量 + `exists()` stat + 可能的 `create_dir_all`」，
+/// 而它在**批量取封面的循环里每张图调一次**（100 张/批 = 100 次重复解析）。
+/// 路径在进程生命周期内不会变（JLOCAL_DATA_DIR 仅启动时有意义），
+/// 故首次解析后直接缓存；缓存失败结果同样缓存，避免每次失败重试 create_dir。
+static THUMBNAILS_DIR: Mutex<Option<Result<PathBuf, String>>> = Mutex::new(None);
+
 fn get_thumbnails_dir() -> Result<PathBuf, String> {
+    if let Ok(mut cache) = THUMBNAILS_DIR.lock() {
+        if let Some(cached) = cache.as_ref() {
+            return cached.clone();
+        }
+        let resolved = resolve_thumbnails_dir();
+        *cache = Some(resolved.clone());
+        return resolved;
+    }
+    // 锁中毒（其他线程 panic）：降级为直接解析，不走缓存但功能正常
+    resolve_thumbnails_dir()
+}
+
+fn resolve_thumbnails_dir() -> Result<PathBuf, String> {
     // 与 paths::get_app_data_dir 保持一致：优先使用 JLOCAL_DATA_DIR（dev 环境），
     // 否则回退到系统本地数据目录，避免 dev/prod 缩略图目录不一致
     let data_dir = if let Ok(dir) = std::env::var("JLOCAL_DATA_DIR") {

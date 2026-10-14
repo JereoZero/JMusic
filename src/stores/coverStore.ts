@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import { LRUCache } from 'lru-cache'
-import { getColor } from 'colorthief'
 import { mutex } from 'async-mutex-lite'
 import { colord } from 'colord'
 import api from '../api'
@@ -34,6 +33,9 @@ async function extractColors(coverBase64: string): Promise<AlbumColors> {
     const img = new Image()
     img.onload = async () => {
       try {
+        // colorthief（35.7KB）仅在这里用到，取色发生在**切歌之后**，
+        // 动态 import 让它不进首屏 main chunk
+        const { getColor } = await import('colorthief')
         const color = await getColor(img)
         if (!color) {
           resolve(NULL_COLORS)

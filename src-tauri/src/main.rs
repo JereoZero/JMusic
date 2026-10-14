@@ -62,9 +62,9 @@ fn main() {
     info!("Starting JlocalMusic v{}", env!("CARGO_PKG_VERSION"));
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+        // 仅保留 dialog：select_folder 命令（commands/misc.rs）实际使用。
+        // 曾还注册 shell/fs，但 Rust 与前端 JS API 均零调用、capabilities 也未授权。
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
 

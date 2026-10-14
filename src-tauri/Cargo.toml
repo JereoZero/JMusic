@@ -6,9 +6,8 @@ edition = "2021"
 [dependencies]
 # Tauri 框架
 tauri = { version = "2.0", features = [] }
-tauri-plugin-shell = "2.0"
+# dialog：select_folder 命令的文件夹选择器（唯一在用的插件）
 tauri-plugin-dialog = "2.0"
-tauri-plugin-fs = "2.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

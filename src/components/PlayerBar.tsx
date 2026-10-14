@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useState, lazy, Suspense } from 'react'
 import { usePlayerStore } from '../stores/playerStore'
 import { useLibraryStore } from '../stores/libraryStore'
 import { usePlayerSettingsStore, usePlayQueueStore } from '../stores/playQueueStore'
@@ -6,9 +6,13 @@ import { useCoverStore } from '../stores/coverStore'
 import { useThemeStore } from '../stores/themeStore'
 import { THEMES } from '../config/themes'
 import { APP_CONFIG } from '../config'
-import { ProgressBar, VolumeControl, PlaybackControls, QueuePanel } from './player'
+import { ProgressBar, VolumeControl, PlaybackControls } from './player'
 import { Heart, Eye, EyeOff, ListMusic } from 'lucide-react'
 import { cn } from '../utils/cn'
+
+// QueuePanel 是 framer-motion 在首屏的消费者之一，首次打开播放队列才加载；
+// 加载后保持挂载，AnimatePresence 的退出动画依赖组件存活
+const QueuePanel = lazy(() => import('./player/QueuePanel'))
 
 export default function PlayerBar({ onToggleLyrics }: { onToggleLyrics?: () => void }) {
   const currentSong = usePlayerStore((s) => s.currentSong)
@@ -150,7 +154,9 @@ export default function PlayerBar({ onToggleLyrics }: { onToggleLyrics?: () => v
         <VolumeControl onVolumeChange={setVolume} />
       </div>
 
-      <QueuePanel open={showQueue} onClose={handleCloseQueue} />
+      <Suspense fallback={null}>
+        <QueuePanel open={showQueue} onClose={handleCloseQueue} />
+      </Suspense>
     </div>
   )
 }

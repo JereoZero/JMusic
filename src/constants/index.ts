@@ -1,7 +1,10 @@
-import type { PlayMode, ViewType } from '../types'
-
-export type { PlayMode, ViewType }
-
+// 音频格式常量：**本文件仅保留 AUDIO_FORMATS**（SongItem 用于标记「不支持」的行样式）。
+//
+// 曾还导出 isAudioFormat / isEncryptedFormat / isNormalFormat / PLAY_MODES /
+// QUEUE_SOURCES / VIEW_TYPES 及 QueueSource 类型 —— 全部零调用：
+//   - 格式判断函数未被任何组件使用（后端 constants.rs 才是格式校验的真源）
+//   - QUEUE_SOURCES / QueueSource：真实类型在 stores/playQueueStore.ts 内联定义
+//   - VIEW_TYPES / PLAY_MODES：App 用 ViewType、播放模式在 store 里
 export const AUDIO_FORMATS = {
   normal: [
     'mp3',
@@ -22,32 +25,4 @@ export const AUDIO_FORMATS = {
   encrypted: ['ncm', 'qmc', 'qmc0', 'qmc3', 'qmcflac', 'qmcogg', 'mflac'] as const,
 
   unsupported: ['wma', 'ape', 'wv', 'wvc', 'tta'] as const,
-
-  all: [] as readonly string[],
 } as const
-
-const _allFormats = [
-  ...AUDIO_FORMATS.normal,
-  ...AUDIO_FORMATS.encrypted,
-  ...AUDIO_FORMATS.unsupported,
-]
-Object.defineProperty(AUDIO_FORMATS, 'all', { value: _allFormats })
-
-export function isAudioFormat(ext: string): boolean {
-  return AUDIO_FORMATS.all.includes(ext.toLowerCase())
-}
-
-export function isEncryptedFormat(ext: string): boolean {
-  return (AUDIO_FORMATS.encrypted as ReadonlyArray<string>).includes(ext.toLowerCase())
-}
-
-export function isNormalFormat(ext: string): boolean {
-  return (AUDIO_FORMATS.normal as ReadonlyArray<string>).includes(ext.toLowerCase())
-}
-
-export const PLAY_MODES: readonly PlayMode[] = ['list', 'loop', 'shuffle']
-
-export const QUEUE_SOURCES = ['local', 'liked', 'history', 'hidden'] as const
-export type QueueSource = (typeof QUEUE_SOURCES)[number]
-
-export const VIEW_TYPES: readonly ViewType[] = ['local', 'liked', 'hidden', 'history', 'settings']
