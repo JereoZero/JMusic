@@ -2,7 +2,6 @@ use tauri::State;
 
 use super::common::{validate_path_in_music_folder, ApiResponse, MAX_BATCH_SIZE};
 use crate::database::Database;
-use crate::database::Song;
 
 #[tauri::command]
 pub async fn hide_song(
@@ -41,14 +40,6 @@ pub async fn get_hidden_paths(db: State<'_, Database>) -> Result<ApiResponse<Vec
 }
 
 #[tauri::command]
-pub async fn get_hidden_songs(db: State<'_, Database>) -> Result<ApiResponse<Vec<Song>>, String> {
-    match db.get_hidden_songs().await {
-        Ok(songs) => Ok(ApiResponse::ok(songs)),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
-
-#[tauri::command]
 pub async fn hide_songs_batch(
     db: State<'_, Database>,
     paths: Vec<String>,
@@ -61,16 +52,14 @@ pub async fn hide_songs_batch(
         )));
     }
 
-    let music_folder = db
-        .get_setting("music_folder")
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or("Music folder not configured".to_string())?;
+    // 走统一入口：自行读 DB 只判了 `None`，漏掉「空串/纯空白」——用空串配置时
+    // canonicalize("") 失败，表现成「0 个路径通过校验」而非「未配置」，语义误导。
+    let (music_folder, secondary_targets) =
+        super::common::get_music_folder_and_targets(&db).await?;
 
-    // is_path_in_music_folder 内部调用 canonicalize（同步系统调用），用 spawn_blocking 避免阻塞 async 线程
-    // 同时获取二级文件夹符号链接目标，用于安全校验
+    // filter_paths_in_music_folder 内部调用 canonicalize（同步系统调用），用 spawn_blocking 避免阻塞 async 线程
+    // 二级文件夹白名单已由上面的统一入口取回（带进程内缓存）
     let valid_paths: Vec<String> = tokio::task::spawn_blocking(move || {
-        let secondary_targets = crate::path_validator::get_secondary_targets(&music_folder);
         // 用批量变体：music_folder 只 canonicalize 一次，而不是每个路径各一次
         crate::path_validator::filter_paths_in_music_folder(
             &paths,
@@ -102,16 +91,12 @@ pub async fn unhide_songs_batch(
         )));
     }
 
-    let music_folder = db
-        .get_setting("music_folder")
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or("Music folder not configured".to_string())?;
+    // 走统一入口（同 hide_songs_batch：空串配置应报「未配置」而非「0 个通过」）
+    let (music_folder, secondary_targets) =
+        super::common::get_music_folder_and_targets(&db).await?;
 
-    // is_path_in_music_folder 内部调用 canonicalize（同步系统调用），用 spawn_blocking 避免阻塞 async 线程
-    // 同时获取二级文件夹符号链接目标，用于安全校验
+    // filter_paths_in_music_folder 内部调用 canonicalize（同步系统调用），用 spawn_blocking 避免阻塞 async 线程
     let valid_paths: Vec<String> = tokio::task::spawn_blocking(move || {
-        let secondary_targets = crate::path_validator::get_secondary_targets(&music_folder);
         // 用批量变体：music_folder 只 canonicalize 一次，而不是每个路径各一次
         crate::path_validator::filter_paths_in_music_folder(
             &paths,
@@ -132,29 +117,6 @@ pub async fn unhide_songs_batch(
 pub async fn clear_hidden_songs(db: State<'_, Database>) -> Result<ApiResponse<usize>, String> {
     match db.clear_hidden_songs().await {
         Ok(count) => Ok(ApiResponse::ok(count)),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
-
-#[tauri::command]
-pub async fn get_hidden_count(db: State<'_, Database>) -> Result<ApiResponse<i64>, String> {
-    match db.get_hidden_count().await {
-        Ok(count) => Ok(ApiResponse::ok(count)),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
-
-#[tauri::command]
-pub async fn is_song_hidden(
-    db: State<'_, Database>,
-    path: String,
-) -> Result<ApiResponse<bool>, String> {
-    if let Err(e) = validate_path_in_music_folder(&db, &path).await {
-        return Ok(ApiResponse::err(e));
-    }
-
-    match db.is_song_hidden(&path).await {
-        Ok(hidden) => Ok(ApiResponse::ok(hidden)),
         Err(e) => Ok(ApiResponse::err(e)),
     }
 }

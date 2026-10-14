@@ -6,13 +6,7 @@ export type { Song }
 // 从 ts-rs 自动生成的类型重新导出（与后端 Rust 结构体保持一致）
 // 运行 `npm run gen:types` 重新生成
 export type { AppLog } from '../../types/generated/AppLog'
-export type { Metadata } from '../../types/generated/Metadata'
 export type { PlayHistory } from '../../types/generated/PlayHistory'
-export type { PlaybackState } from '../../types/generated/PlaybackState'
-
-// 后端播放器状态（重命名为 BackendPlayerState 避免与 UI 层 PlayerState 冲突）
-import type { PlayerState as BackendPlayerState } from '../../types/generated/PlayerState'
-export type { BackendPlayerState }
 
 // 扫描结果（后端名为 ScanResult，前端别名 ScanFolderResult 保持兼容）
 import type { ScanResult } from '../../types/generated/ScanResult'
@@ -28,12 +22,6 @@ export interface ApiResponse<T> {
 export interface LyricSource {
   type: 'embedded' | 'external'
   content: string
-}
-
-export interface ThumbnailInfo {
-  small_count: number
-  large_count: number
-  size_bytes: number
 }
 
 /**

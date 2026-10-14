@@ -1,26 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import type { Song } from '../../types'
 
-vi.mock('../../api/backend-api', () => ({
-  getSongs: vi.fn().mockResolvedValue([]),
-  getLikedPaths: vi.fn().mockResolvedValue([]),
-  getHiddenPaths: vi.fn().mockResolvedValue([]),
-  toggleLike: vi.fn().mockResolvedValue(undefined),
-  hideSong: vi.fn().mockResolvedValue(undefined),
-  unhideSong: vi.fn().mockResolvedValue(undefined),
-}))
-
-vi.mock('../../api/mock-api', () => ({
-  mockApi: {
-    getSongs: vi.fn().mockResolvedValue([]),
-    getLikedPaths: vi.fn().mockResolvedValue([]),
-    getHiddenPaths: vi.fn().mockResolvedValue([]),
-    toggleLike: vi.fn().mockResolvedValue(undefined),
-    hideSong: vi.fn().mockResolvedValue(undefined),
-    unhideSong: vi.fn().mockResolvedValue(undefined),
-  },
-}))
-
 // mock 底层 invoke，使 invokeApi 在 jsdom 环境下可被追踪
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),

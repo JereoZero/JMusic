@@ -235,58 +235,6 @@ pub fn cleanup_orphan_thumbnails(valid_paths: &[String]) -> usize {
     removed
 }
 
-pub fn get_thumbnails_count() -> (usize, usize) {
-    let thumbnails_dir = match get_thumbnails_dir() {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!("get_thumbnails_count: {}", e);
-            return (0, 0);
-        }
-    };
-    let mut small_count = 0;
-    let mut large_count = 0;
-
-    if thumbnails_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&thumbnails_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.ends_with(&format!("_{}.jpg", THUMBNAIL_SMALL_SIZE)) {
-                    small_count += 1;
-                } else if name.ends_with(&format!("_{}.jpg", THUMBNAIL_LARGE_SIZE)) {
-                    large_count += 1;
-                }
-            }
-        }
-    }
-
-    (small_count, large_count)
-}
-
-pub fn get_thumbnails_size() -> u64 {
-    let thumbnails_dir = match get_thumbnails_dir() {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!("get_thumbnails_size: {}", e);
-            return 0;
-        }
-    };
-    let mut total_size = 0;
-
-    if thumbnails_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&thumbnails_dir) {
-            for entry in entries.flatten() {
-                if entry.path().extension().is_some_and(|ext| ext == "jpg") {
-                    if let Ok(metadata) = entry.metadata() {
-                        total_size += metadata.len();
-                    }
-                }
-            }
-        }
-    }
-
-    total_size
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

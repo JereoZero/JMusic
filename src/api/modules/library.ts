@@ -18,10 +18,6 @@ export async function clearLikedSongs(): Promise<number> {
   return (await invokeApi<number>('clear_liked_songs')) ?? 0
 }
 
-export async function isSongLiked(path: string): Promise<boolean> {
-  return (await invokeApi<boolean>('is_song_liked', { path })) ?? false
-}
-
 // 隐藏
 export async function hideSong(path: string, isAuto?: boolean): Promise<void> {
   await invokeApi<void>('hide_song', { path, isAuto })
@@ -35,10 +31,6 @@ export async function getHiddenPaths(): Promise<string[]> {
   return (await invokeApi<string[]>('get_hidden_paths')) ?? []
 }
 
-export async function getHiddenSongs(): Promise<Song[]> {
-  return (await invokeApi<Song[]>('get_hidden_songs')) ?? []
-}
-
 export async function hideSongsBatch(paths: string[], isAuto?: boolean): Promise<number> {
   return (await invokeApi<number>('hide_songs_batch', { paths, isAuto })) ?? 0
 }
@@ -49,12 +41,4 @@ export async function unhideSongsBatch(paths: string[]): Promise<number> {
 
 export async function clearHiddenSongs(): Promise<number> {
   return (await invokeApi<number>('clear_hidden_songs')) ?? 0
-}
-
-export async function getHiddenCount(): Promise<number> {
-  return (await invokeApi<number>('get_hidden_count')) ?? 0
-}
-
-export async function isSongHidden(path: string): Promise<boolean> {
-  return (await invokeApi<boolean>('is_song_hidden', { path })) ?? false
 }

@@ -9,8 +9,8 @@ export type PlayMode = 'list' | 'loop' | 'shuffle'
 
 /**
  * UI 层的播放器状态。
- * 注意：与后端 `PlayerState`（src/types/generated/PlayerState.ts）不同，
- * 后者描述后端播放器的实际状态，前端通过 `BackendPlayerState` 别名引用。
+ * （后端 `PlayerState` 仍在 types/generated/PlayerState.ts，由 gen:types 生成；
+ *   get_player_state 命令前端已无调用。）
  */
 export interface PlayerState {
   currentSong: Song | null

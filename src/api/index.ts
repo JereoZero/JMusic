@@ -1,20 +1,8 @@
-// API 入口
-// 检测运行环境并导出对应的 API 实现
+// API 入口：re-export 所有命令模块
+// （原实现包含浏览器非 Tauri 环境的 mock-api 分支脚手架，已删除——
+//   应用仅在 Tauri 环境运行，mock-api 无真实消费方，仅测试里的 vi.mock 引用其路径。）
 
-import * as realApi from './modules'
-import { mockApi } from './mock-api'
-
-// 编译期类型检查：mockApi 必须实现 realApi 的所有公开方法
-// invokeApi 是内部工具函数，前端不通过 api 对象调用，故排除
-void (mockApi satisfies Omit<typeof realApi, 'invokeApi'>)
-
-// 检测 Tauri 运行环境：
-// - 用 `__TAURI_INTERNALS__` 而非 `__TAURI__`，前者是 Tauri 2.x IPC 底层机制，
-//   无论 withGlobalTauri 是否开启都会注入；后者只在 withGlobalTauri=true 时存在。
-//   因此本检测与 tauri.conf.json 中 withGlobalTauri=false 的安全配置解耦。
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-
-const api = isTauri ? realApi : mockApi
+import * as api from './modules'
 
 export default api
 export * from './modules'

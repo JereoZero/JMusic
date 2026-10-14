@@ -1,76 +1,41 @@
 use tauri::State;
 
 use super::common::{validate_path_in_music_folder, ApiResponse};
-use crate::database::AppLog;
+use crate::app_log;
 use crate::database::Database;
 use crate::database::PlayHistory;
 
-/// 合法日志级别白名单
+/// 合法日志级别白名单（与设置页筛选项一致）
 fn is_valid_level(level: &str) -> bool {
     const VALID_LEVELS: &[&str] = &["INFO", "WARN", "ERROR", "DEBUG", "TRACE"];
     VALID_LEVELS.contains(&level)
 }
 
-#[tauri::command]
-pub async fn add_log(
-    db: State<'_, Database>,
-    level: String,
-    message: String,
-    target: Option<String>,
-) -> Result<ApiResponse<()>, String> {
-    if !is_valid_level(&level) {
-        return Ok(ApiResponse::err(format!("Invalid log level: {}", level)));
-    }
-    match db.add_log(&level, &message, target.as_deref()).await {
-        Ok(_) => Ok(ApiResponse::ok(())),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
+// ==================== 日志（读取内存环形缓冲，见 crate::app_log） ====================
 
 #[tauri::command]
-pub async fn get_logs(
-    db: State<'_, Database>,
+pub fn get_logs(
     level: Option<String>,
     limit: Option<i64>,
-) -> Result<ApiResponse<Vec<AppLog>>, String> {
-    match db.get_logs(level.as_deref(), limit).await {
-        Ok(logs) => Ok(ApiResponse::ok(logs)),
-        Err(e) => Ok(ApiResponse::err(e)),
+) -> Result<ApiResponse<Vec<app_log::AppLog>>, String> {
+    if let Some(ref l) = level {
+        if !is_valid_level(l) {
+            return Ok(ApiResponse::err(format!("Invalid log level: {}", l)));
+        }
     }
+    Ok(ApiResponse::ok(app_log::get_logs(level.as_deref(), limit)))
 }
 
 #[tauri::command]
-pub async fn get_error_logs(db: State<'_, Database>) -> Result<ApiResponse<Vec<AppLog>>, String> {
-    match db.get_error_logs().await {
-        Ok(logs) => Ok(ApiResponse::ok(logs)),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
+pub fn clear_logs() -> Result<ApiResponse<usize>, String> {
+    Ok(ApiResponse::ok(app_log::clear()))
 }
 
 #[tauri::command]
-pub async fn clear_logs(db: State<'_, Database>) -> Result<ApiResponse<usize>, String> {
-    match db.clear_logs().await {
-        Ok(count) => Ok(ApiResponse::ok(count)),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
-
-#[tauri::command]
-pub async fn get_log_count(db: State<'_, Database>) -> Result<ApiResponse<i64>, String> {
-    match db.get_log_count().await {
-        Ok(count) => Ok(ApiResponse::ok(count)),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
-
-#[tauri::command]
-pub async fn get_logs_as_text(db: State<'_, Database>) -> Result<ApiResponse<String>, String> {
+pub fn get_logs_as_text() -> Result<ApiResponse<String>, String> {
     use std::fmt::Write;
 
-    let logs = match db.get_logs(None, Some(100)).await {
-        Ok(logs) => logs,
-        Err(e) => return Ok(ApiResponse::err(e.to_string())),
-    };
+    let logs = app_log::get_logs(None, Some(100));
 
     let mut output = String::new();
     let _ = writeln!(&mut output, "=== JlocalMusic 日志 ===");
@@ -83,15 +48,18 @@ pub async fn get_logs_as_text(db: State<'_, Database>) -> Result<ApiResponse<Str
     for log in logs {
         let _ = writeln!(
             &mut output,
-            "[{}] [{}] {}",
+            "[{}] [{}] [{}] {}",
             log.created_at.format("%Y-%m-%d %H:%M:%S"),
             log.level,
+            log.target.as_deref().unwrap_or("-"),
             log.message
         );
     }
 
     Ok(ApiResponse::ok(output))
 }
+
+// ==================== 播放历史 ====================
 
 #[tauri::command]
 pub async fn add_play_history(
@@ -128,41 +96,6 @@ pub async fn get_play_history(
 pub async fn clear_play_history(db: State<'_, Database>) -> Result<ApiResponse<()>, String> {
     match db.clear_play_history().await {
         Ok(_) => Ok(ApiResponse::ok(())),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
-
-#[tauri::command]
-pub async fn get_play_counts(
-    db: State<'_, Database>,
-) -> Result<ApiResponse<Vec<(String, i64)>>, String> {
-    match db.get_play_counts().await {
-        Ok(counts) => Ok(ApiResponse::ok(counts)),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
-
-#[tauri::command]
-pub async fn get_song_play_count(
-    db: State<'_, Database>,
-    path: String,
-) -> Result<ApiResponse<i64>, String> {
-    if let Err(e) = validate_path_in_music_folder(&db, &path).await {
-        return Ok(ApiResponse::err(e));
-    }
-
-    match db.get_song_play_count(&path).await {
-        Ok(count) => Ok(ApiResponse::ok(count)),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
-
-#[tauri::command]
-pub async fn cleanup_nonexistent_songs(
-    db: State<'_, Database>,
-) -> Result<ApiResponse<usize>, String> {
-    match db.cleanup_nonexistent_songs().await {
-        Ok(count) => Ok(ApiResponse::ok(count)),
         Err(e) => Ok(ApiResponse::err(e)),
     }
 }

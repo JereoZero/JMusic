@@ -80,29 +80,12 @@ pub enum DatabaseError {
     Io(#[from] std::io::Error),
     #[error("迁移错误: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
-    #[error("歌曲不存在: {0}")]
-    SongNotFound(String),
 }
 
 /// 数据库管理器
 #[derive(Clone)]
 pub struct Database {
     pool: Pool<Sqlite>,
-}
-
-/// FTS5 trigram 分词器生成 token 所需的最少字符数。
-/// 少于 3 个字符的查询无法在 songs_fts 中命中，需回退到 LIKE 路径。
-const FTS_MIN_QUERY_CHARS: usize = 3;
-
-/// 把用户输入包装成 FTS5 短语查询。
-///
-/// MATCH 的操作数是 FTS5 查询语法（`-`、`:`、`*`、`(`、`^` 等均为元字符），
-/// 直接拼接用户输入会因语法错误而报错。用双引号包裹成短语后，内部的双引号
-/// 按 FTS5 规则转义为两个双引号。
-///
-/// trigram 索引下，短语查询等价于子串匹配（短语要求各 trigram 位置相邻）。
-fn fts_phrase_query(query: &str) -> String {
-    format!("\"{}\"", query.replace('"', "\"\""))
 }
 
 impl Database {
@@ -493,6 +476,9 @@ impl Database {
     }
 
     /// 获取播放次数统计
+    /// 仅测试用：验证 `increment_play_count` 的双真源同步（生产代码前端无入口，
+    /// 次数整表存前端 store）
+    #[cfg(test)]
     pub async fn get_play_counts(&self) -> Result<Vec<(String, i64)>, DatabaseError> {
         let counts = sqlx::query_as::<_, (String, i64)>(
             "SELECT path, count FROM play_counts ORDER BY count DESC",
@@ -504,6 +490,8 @@ impl Database {
     }
 
     /// 获取歌曲的播放次数
+    /// 仅测试用（同上）
+    #[cfg(test)]
     pub async fn get_song_play_count(&self, path: &str) -> Result<i64, DatabaseError> {
         let count: Option<i64> = sqlx::query_scalar("SELECT count FROM play_counts WHERE path = ?")
             .bind(path)
@@ -707,6 +695,25 @@ impl Database {
             return Ok(0);
         }
 
+        // ⚠️ 护栏：新目录必须「看起来像个音乐库」（至少含一个可播放音频文件）才删除。
+        //
+        // 系统选择器选中的目录必然是目录，所以仅判断「是目录」对最常见的误操作
+        // （选错一个空目录）完全无效：所有歌曲都判为范围外 → 整库记录连同喜欢/
+        // 播放历史被级联删除且不可恢复。失败方向必须安全：判不过就跳过清理，
+        // 后果只是旧记录暂时留着（下次目录有内容后自动清掉），而不是删光。
+        //
+        // 放在这个唯一删除入口，设置页与启动扫描两个调用点自动都被覆盖 ——
+        // 只修调用方的话，被跳过的清理会在下次启动扫描时补删。
+        if !crate::paths::folder_contains_audio(base) {
+            warn!(
+                "Skipped cleanup of {} song(s): '{}' does not look like a music folder \
+                 (no playable audio file found). Wrong directory selected?",
+                outside.len(),
+                folder
+            );
+            return Ok(0);
+        }
+
         info!(
             "Removing {} song(s) outside the current music folder ({})",
             outside.len(),
@@ -746,107 +753,6 @@ impl Database {
         }
 
         Ok(removed_count)
-    }
-
-    /// 删除歌曲及关联数据
-    /// 利用 FK ON DELETE CASCADE 自动清理 play_counts/play_history/liked_songs；
-    /// hidden_songs 无 FK 级联，需显式删除。
-    pub async fn delete_song(&self, path: &str) -> Result<(), DatabaseError> {
-        let mut tx = self.pool.begin().await?;
-
-        // 先删 songs 并判断 rows_affected，再删 hidden_songs
-        // 避免孤立 hidden_songs 记录存在但 songs 不存在时返回错误导致 hidden_songs 无法清理
-        let result = sqlx::query("DELETE FROM songs WHERE path = ?")
-            .bind(path)
-            .execute(&mut *tx)
-            .await?;
-
-        if result.rows_affected() == 0 {
-            return Err(DatabaseError::SongNotFound(path.to_string()));
-        }
-
-        sqlx::query("DELETE FROM hidden_songs WHERE path = ?")
-            .bind(path)
-            .execute(&mut *tx)
-            .await?;
-
-        tx.commit().await?;
-        Ok(())
-    }
-
-    /// 搜索歌曲（title / artist / album 子串匹配）
-    ///
-    /// 走 songs_fts 倒排索引。原先的 `LIKE '%x%'` 因前导通配符无法使用
-    /// idx_songs_title / artist / album，每次搜索都是全表扫描。
-    ///
-    /// trigram 分词器至少要 3 个字符才能生成 token，1~2 字符的查询命中不了索引，
-    /// 此时回退到 LIKE 子串匹配（这类短查询的结果集通常极小，代价可接受）。
-    pub async fn search_songs(&self, query: &str) -> Result<Vec<Song>, DatabaseError> {
-        let trimmed = query.trim();
-        // 空查询防御：避免 pattern="%%" 匹配全表
-        if trimmed.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        if trimmed.chars().count() >= FTS_MIN_QUERY_CHARS {
-            let fts_query = fts_phrase_query(trimmed);
-            let songs = sqlx::query_as::<_, Song>(
-                r#"
-                SELECT
-                    s.id,
-                    s.title,
-                    s.artist,
-                    s.album,
-                    s.duration,
-                    s.path,
-                    NULL as cover,
-                    s.play_count,
-                    s.created_at,
-                    CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END as is_liked
-                FROM songs_fts
-                JOIN songs s ON s.rowid = songs_fts.rowid
-                LEFT JOIN liked_songs l ON s.path = l.path
-                WHERE songs_fts MATCH ?1
-                ORDER BY s.title
-                "#,
-            )
-            .bind(&fts_query)
-            .fetch_all(&self.pool)
-            .await?;
-
-            return Ok(songs);
-        }
-
-        let escaped = trimmed
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
-        let pattern = format!("%{}%", escaped);
-
-        let songs = sqlx::query_as::<_, Song>(
-            r#"
-            SELECT
-                s.id,
-                s.title,
-                s.artist,
-                s.album,
-                s.duration,
-                s.path,
-                NULL as cover,
-                s.play_count,
-                s.created_at,
-                CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END as is_liked
-            FROM songs s
-            LEFT JOIN liked_songs l ON s.path = l.path
-            WHERE s.title LIKE ?1 ESCAPE '\' OR s.artist LIKE ?1 ESCAPE '\' OR s.album LIKE ?1 ESCAPE '\'
-            ORDER BY s.title
-            "#,
-        )
-        .bind(&pattern)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(songs)
     }
 
     // ==================== 隐藏歌曲管理 ====================
@@ -926,6 +832,9 @@ impl Database {
     }
 
     /// 检查歌曲是否被隐藏
+    /// 仅测试用：生产代码前端无入口（隐藏状态整表存前端 store），
+    /// 测试用它验证 EXISTS 过滤与 [`Self::get_hidden_paths`] 口径一致
+    #[cfg(test)]
     pub async fn is_song_hidden(&self, path: &str) -> Result<bool, DatabaseError> {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hidden_songs WHERE path = ?")
             .bind(path)
@@ -937,7 +846,7 @@ impl Database {
 
     /// 获取所有隐藏的歌曲路径
     ///
-    /// 用 EXISTS 过滤未入库路径，与 [`Self::get_hidden_songs`] 的 INNER JOIN 口径一致
+    /// 用 EXISTS 过滤未入库路径，与计数口径一致
     /// （hidden_songs 对 songs 没有外键，历史数据可能含未入库路径，不过滤会出现
     /// 「计数/路径数量」与「列表长度」不一致）。
     pub async fn get_hidden_paths(&self) -> Result<Vec<String>, DatabaseError> {
@@ -1092,9 +1001,8 @@ impl Database {
     }
 
     /// 获取隐藏歌曲数量
-    ///
-    /// 用 EXISTS 过滤未入库路径，与 [`Self::get_hidden_songs`] 的 INNER JOIN 口径一致
-    /// —— 否则界面上的「隐藏 N 首」会比列表里实际显示的多。
+    /// 仅测试用（同 is_song_hidden）
+    #[cfg(test)]
     pub async fn get_hidden_count(&self) -> Result<i64, DatabaseError> {
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM hidden_songs h \
@@ -1137,121 +1045,9 @@ impl Database {
         Ok(())
     }
 
-    /// 获取所有设置
-    pub async fn get_all_settings(&self) -> Result<Vec<(String, String)>, DatabaseError> {
-        let settings = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM settings")
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(settings)
-    }
-
-    // ==================== 喜欢歌曲管理 ====================
-
-    /// 检查歌曲是否已喜欢
-    pub async fn is_song_liked(&self, path: &str) -> Result<bool, DatabaseError> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM liked_songs WHERE path = ?")
-            .bind(path)
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(count > 0)
-    }
-
-    /// 获取隐藏的完整歌曲信息
-    pub async fn get_hidden_songs(&self) -> Result<Vec<Song>, DatabaseError> {
-        let songs = sqlx::query_as::<_, Song>(
-            r#"
-            SELECT
-                s.id,
-                s.title,
-                s.artist,
-                s.album,
-                s.duration,
-                s.path,
-                NULL as cover,
-                s.play_count,
-                s.created_at,
-                CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END as is_liked
-            FROM songs s
-            INNER JOIN hidden_songs h ON s.path = h.path
-            LEFT JOIN liked_songs l ON s.path = l.path
-            ORDER BY h.hidden_at DESC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(songs)
-    }
-
     // ==================== 日志管理 ====================
-
-    /// 添加日志
-    pub async fn add_log(
-        &self,
-        level: &str,
-        message: &str,
-        target: Option<&str>,
-    ) -> Result<(), DatabaseError> {
-        sqlx::query("INSERT INTO app_logs (level, message, target) VALUES (?1, ?2, ?3)")
-            .bind(level)
-            .bind(message)
-            .bind(target)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(())
-    }
-
-    /// 获取日志
-    pub async fn get_logs(
-        &self,
-        level: Option<&str>,
-        limit: Option<i64>,
-    ) -> Result<Vec<AppLog>, DatabaseError> {
-        let limit = limit.filter(|&l| l > 0).unwrap_or(100).min(1000);
-
-        let logs = if let Some(level) = level {
-            sqlx::query_as::<_, AppLog>(
-                "SELECT * FROM app_logs WHERE level = ?1 ORDER BY created_at DESC LIMIT ?2",
-            )
-            .bind(level)
-            .bind(limit)
-            .fetch_all(&self.pool)
-            .await?
-        } else {
-            sqlx::query_as::<_, AppLog>("SELECT * FROM app_logs ORDER BY created_at DESC LIMIT ?1")
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?
-        };
-
-        Ok(logs)
-    }
-
-    /// 获取错误日志
-    pub async fn get_error_logs(&self) -> Result<Vec<AppLog>, DatabaseError> {
-        self.get_logs(Some("ERROR"), None).await
-    }
-
-    /// 清空日志
-    pub async fn clear_logs(&self) -> Result<usize, DatabaseError> {
-        let result = sqlx::query("DELETE FROM app_logs")
-            .execute(&self.pool)
-            .await?;
-
-        Ok(result.rows_affected() as usize)
-    }
-
-    /// 获取日志数量
-    pub async fn get_log_count(&self) -> Result<i64, DatabaseError> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_logs")
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(count)
-    }
+    // 日志已迁移至 `crate::app_log`（内存环形缓冲 + tracing subscriber），
+    // 不再走 SQLite：原 app_logs 表零写入方，且无上限轮转会持续膨胀。
 
     /// 测试用构造方法：使用临时数据库文件，跳过 AppHandle 依赖
     /// 仅在 cfg(test) 下编译，不影响生产代码
@@ -1273,19 +1069,6 @@ impl Database {
 
         Ok(Self { pool })
     }
-}
-
-/// 日志数据结构
-#[derive(Debug, Clone, Serialize, sqlx::FromRow, TS)]
-#[ts(export)]
-pub struct AppLog {
-    // SQLite INTEGER 序列化为 JSON number（不会超 2^53），覆盖 ts-rs 10.x 默认的 bigint
-    #[ts(type = "number")]
-    pub id: i64,
-    pub level: String,
-    pub message: String,
-    pub target: Option<String>,
-    pub created_at: DateTime<Utc>,
 }
 
 /// 播放历史数据结构
@@ -1355,7 +1138,7 @@ mod tests {
         let (db, _tmp) = setup_db().await;
         let song = make_song("/music/a.mp3", "SongA");
         let (success, errors) = db
-            .upsert_songs(&[song.clone()])
+            .upsert_songs(std::slice::from_ref(&song))
             .await
             .expect("upsert failed");
         assert_eq!(success, 1);
@@ -1633,139 +1416,6 @@ mod tests {
         db.upsert_songs(&[song]).await.expect("upsert failed");
     }
 
-    #[test]
-    fn test_fts_phrase_query_escapes_quotes() {
-        // 内部双引号需按 FTS5 规则转义成两个，否则会破坏短语边界导致语法错误
-        assert_eq!(fts_phrase_query("ab\"cd"), "\"ab\"\"cd\"");
-        assert_eq!(fts_phrase_query("plain"), "\"plain\"");
-    }
-
-    #[tokio::test]
-    async fn test_search_songs_empty_query_returns_empty() {
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.mp3", "SongA", "ArtistA", "AlbumA").await;
-
-        assert!(db.search_songs("").await.unwrap().is_empty());
-        assert!(db.search_songs("   ").await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_search_songs_matches_title_substring() {
-        // 关键回归：中间子串命中（原 LIKE '%x%' 的语义必须保留）
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.mp3", "Hello Beautiful World", "X", "Y").await;
-        insert_song(&db, "/music/b.mp3", "Another Song", "X", "Y").await;
-
-        let hits = db.search_songs("Beautiful").await.unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].path, "/music/a.mp3");
-    }
-
-    #[tokio::test]
-    async fn test_search_songs_matches_artist_and_album() {
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.mp3", "T1", "Radiohead", "Kid A").await;
-        insert_song(&db, "/music/b.mp3", "T2", "Others", "Other Album").await;
-
-        assert_eq!(db.search_songs("Radiohead").await.unwrap().len(), 1);
-        assert_eq!(db.search_songs("Kid A").await.unwrap().len(), 1);
-        assert_eq!(db.search_songs("Others").await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_search_songs_case_insensitive() {
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.mp3", "Hello World", "X", "Y").await;
-
-        assert_eq!(db.search_songs("hello").await.unwrap().len(), 1);
-        assert_eq!(db.search_songs("HELLO").await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_search_songs_short_query_falls_back_to_like() {
-        // trigram 至少要 3 个字符，1~2 字符走 LIKE 回退，结果必须正确
-        // 注意：LIKE 是子串匹配，"Another" 也含 "he"，所以这里用 "Wo" 保证唯一命中
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.mp3", "Hello World", "X", "Y").await;
-        insert_song(&db, "/music/b.mp3", "Another Song", "X", "Y").await;
-
-        let hits = db.search_songs("Wo").await.unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].path, "/music/a.mp3");
-
-        // 2 个中文字符同样走回退路径
-        insert_song(&db, "/music/c.mp3", "周杰伦的晴天", "周杰伦", "叶惠美").await;
-        assert_eq!(db.search_songs("周杰").await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_search_songs_chinese_substring() {
-        // trigram 按字符切分，中文无需分词器即可检索
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.mp3", "周杰伦的晴天", "周杰伦", "叶惠美").await;
-        insert_song(&db, "/music/b.mp3", "无关于此", "其他人", "其他专辑").await;
-
-        let hits = db.search_songs("周杰伦").await.unwrap();
-        assert_eq!(hits.len(), 1, "中文子串应命中");
-        assert_eq!(hits[0].path, "/music/a.mp3");
-    }
-
-    #[tokio::test]
-    async fn test_search_songs_special_chars_do_not_error() {
-        // FTS5 的 MATCH 有独立语法（- : * " ( 均为元字符），
-        // 用户输入必须被安全地转成短语，不能触发语法错误
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.mp3", "Song a-b Test", "X", "Y").await;
-
-        for query in ["a-b", "a*b", "a\"b", "a(b", "a:b", "a^b", "a OR b", "NOT"] {
-            db.search_songs(query)
-                .await
-                .unwrap_or_else(|e| panic!("查询 {:?} 不应报错: {}", query, e));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_search_songs_reflects_update() {
-        // 触发器必须同步索引：upsert 改了 title 后，旧关键词不应再命中
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.mp3", "OldTitle", "X", "Y").await;
-        assert_eq!(db.search_songs("OldTitle").await.unwrap().len(), 1);
-
-        insert_song(&db, "/music/a.mp3", "NewTitle", "X", "Y").await;
-
-        assert_eq!(db.search_songs("NewTitle").await.unwrap().len(), 1);
-        assert!(
-            db.search_songs("OldTitle").await.unwrap().is_empty(),
-            "旧标题不应再命中，说明 FTS 索引已同步"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_songs_reflects_delete() {
-        // 删除歌曲后索引必须同步清理，否则搜索会返回已不存在的记录
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.mp3", "DeleteMe", "X", "Y").await;
-        assert_eq!(db.search_songs("DeleteMe").await.unwrap().len(), 1);
-
-        db.delete_song("/music/a.mp3").await.unwrap();
-
-        assert!(
-            db.search_songs("DeleteMe").await.unwrap().is_empty(),
-            "删除后不应命中"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_search_songs_reports_liked_state() {
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.mp3", "LikedSong", "X", "Y").await;
-        db.toggle_like("/music/a.mp3", true).await.unwrap();
-
-        let hits = db.search_songs("LikedSong").await.unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].is_liked, Some(true), "搜索结果应带 is_liked");
-    }
-
     // ===== 隐藏歌曲：计数口径与「取消隐藏」记忆 =====
 
     #[tokio::test]
@@ -1790,7 +1440,6 @@ mod tests {
             1,
             "计数必须与列表口径一致（排除未入库路径）"
         );
-        assert_eq!(db.get_hidden_songs().await.unwrap().len(), 1);
         assert_eq!(
             db.get_hidden_paths().await.unwrap(),
             vec!["/music/a.mp3".to_string()],
@@ -1890,47 +1539,30 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_remove_song_cleans_hidden_related_rows() {
-        // 歌曲被删除时，hidden_songs（无外键）与 unhidden_overrides（有外键级联）
-        // 都不应留下孤儿记录
-        let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/music/a.ncm", "A", "X", "Y").await;
-        db.hide_song("/music/a.ncm", false).await.unwrap();
-        db.unhide_song("/music/a.ncm").await.unwrap();
-
-        db.delete_song("/music/a.ncm").await.unwrap();
-
-        let hidden: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hidden_songs")
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
-        let overrides: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM unhidden_overrides")
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
-        assert_eq!(hidden, 0, "hidden_songs 不应残留孤儿记录");
-        assert_eq!(overrides, 0, "unhidden_overrides 应随 songs 级联删除");
-    }
-
     // ===== 更换音乐文件夹：清理不在新目录下的记录 =====
 
     #[tokio::test]
     async fn test_cleanup_songs_outside_folder() {
         // 回归：换音乐文件夹后，旧目录的记录仍在库里但路径校验全部失败
-        // （列表可见、操作全被拒），且旧文件还在磁盘上，cleanup_nonexistent_songs 不会清
+        // （列表可见、操作全被拒），且旧文件还在磁盘上，cleanup_nonexistent_songs 不会清。
+        // 目录用真实临时目录（护栏要求「新目录含音频」），DB 里混放新旧目录的记录。
         let (db, _tmp) = setup_db().await;
+        let new_dir = TempDir::new().unwrap();
+        std::fs::write(new_dir.path().join("song.flac"), b"x").unwrap();
+        let new_str = new_dir.path().to_str().unwrap();
+
+        let keep_path = format!("{}/c.mp3", new_str); // 在新目录下 → 保留
         insert_song(&db, "/old/a.mp3", "A", "X", "Y").await;
         insert_song(&db, "/old/sub/b.mp3", "B", "X", "Y").await;
-        insert_song(&db, "/new/c.mp3", "C", "X", "Y").await;
+        insert_song(&db, &keep_path, "C", "X", "Y").await;
         db.toggle_like("/old/a.mp3", true).await.unwrap();
 
-        let removed = db.cleanup_songs_outside_folder("/new").await.unwrap();
+        let removed = db.cleanup_songs_outside_folder(new_str).await.unwrap();
 
-        assert_eq!(removed, 2, "只应删除不在 /new 下的记录");
+        assert_eq!(removed, 2, "只应删除不在新目录下的记录");
         let songs = db.get_songs().await.unwrap();
         assert_eq!(songs.len(), 1);
-        assert_eq!(songs[0].path, "/new/c.mp3");
+        assert_eq!(songs[0].path, keep_path);
         assert!(
             db.get_liked_paths().await.unwrap().is_empty(),
             "被清理歌曲的喜欢记录应随之级联删除"
@@ -1938,16 +1570,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cleanup_songs_outside_folder_keeps_sibling_prefix() {
-        // /Music2 不是 /Music 的子路径：必须用组件级比较，字符串前缀会把
-        // /Music2/a.mp3 误判为 /Music 下的歌曲而漏删（或反之误删）
+    async fn test_cleanup_songs_outside_folder_skipped_when_new_folder_has_no_audio() {
+        // 🔴 核心护栏回归：用户用系统选择器选错了一个**空目录**（存在、是目录，
+        // 但没有任何音频文件）→ 所有歌曲都被判为「范围外」→ 若不拦截，整库记录
+        // 连同喜欢/播放历史被级联删除且不可恢复。
         let (db, _tmp) = setup_db().await;
-        insert_song(&db, "/Music/a.mp3", "A", "X", "Y").await;
-        insert_song(&db, "/Music2/b.mp3", "B", "X", "Y").await;
+        let empty_dir = TempDir::new().unwrap(); // 存在且是目录，但没有音频
+        let empty_str = empty_dir.path().to_str().unwrap();
 
-        let removed = db.cleanup_songs_outside_folder("/Music").await.unwrap();
+        insert_song(&db, "/music/a.mp3", "A", "X", "Y").await;
+        insert_song(&db, "/music/b.mp3", "B", "X", "Y").await;
+        db.toggle_like("/music/a.mp3", true).await.unwrap();
 
-        assert_eq!(removed, 1);
+        let removed = db.cleanup_songs_outside_folder(empty_str).await.unwrap();
+
+        assert_eq!(removed, 0, "新目录无音频 → 必须跳过清理");
+        assert_eq!(db.get_songs().await.unwrap().len(), 2, "记录不得被删");
+        assert_eq!(
+            db.get_liked_paths().await.unwrap(),
+            vec!["/music/a.mp3".to_string()],
+            "喜欢记录不得被级联删除"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_songs_outside_folder_skipped_when_new_folder_missing() {
+        // 新目录不存在（外接盘未挂载 / 拼写错误）时，路径 is_dir() 已为 false
+        let (db, _tmp) = setup_db().await;
+        insert_song(&db, "/music/a.mp3", "A", "X", "Y").await;
+
+        let removed = db
+            .cleanup_songs_outside_folder("/definitely-not-a-real-folder-xyz")
+            .await
+            .unwrap();
+
+        assert_eq!(removed, 0);
+        assert_eq!(db.get_songs().await.unwrap().len(), 1, "记录不得被删");
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_songs_outside_folder_keeps_sibling_prefix() {
+        // 组件级 vs 字符串前缀：/Music2/b.mp3 的字符串前缀形如 /Music...，
+        // 若用字符串 starts_with 会被误判为曲库内而漏删。
+        let (db, _tmp) = setup_db().await;
+        let base = TempDir::new().unwrap();
+        std::fs::write(base.path().join("a.flac"), b"x").unwrap();
+        let base_str = base.path().to_str().unwrap();
+
+        // 在新曲库根下（按真实路径前缀），应保留
+        let keep_path = format!("{}/a.mp3", base_str);
+        insert_song(&db, &keep_path, "A", "X", "Y").await;
+        // 伪造一个「字符串前缀像但组件级不是」的兄弟目录路径，应被清理
+        insert_song(&db, &format!("{}2/b.mp3", base_str), "B", "X", "Y").await;
+
+        let removed = db.cleanup_songs_outside_folder(base_str).await.unwrap();
+
+        assert_eq!(removed, 1, "{base_str}2/b.mp3 不是组件级子路径，应被清理");
         let paths: Vec<String> = db
             .get_songs()
             .await
@@ -1955,7 +1633,7 @@ mod tests {
             .into_iter()
             .map(|s| s.path)
             .collect();
-        assert_eq!(paths, vec!["/Music/a.mp3".to_string()]);
+        assert_eq!(paths, vec![keep_path]);
     }
 
     #[tokio::test]

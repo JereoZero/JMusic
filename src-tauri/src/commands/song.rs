@@ -4,7 +4,7 @@ use tauri::State;
 
 use super::common::{
     get_music_folder_and_targets, get_or_create_thumbnail, validate_path_in_music_folder,
-    ApiResponse, ThumbnailInfo, MAX_BATCH_SIZE,
+    ApiResponse, MAX_BATCH_SIZE,
 };
 use crate::database::Database;
 use crate::database::Song;
@@ -121,31 +121,6 @@ async fn extract_cover_with_fallback(
     find_fallback_cover(path, music_folder, secondary_targets).await
 }
 
-#[tauri::command]
-pub async fn get_song_cover_full(
-    db: State<'_, Database>,
-    path: String,
-) -> Result<ApiResponse<Option<String>>, String> {
-    if let Err(e) = validate_path_in_music_folder(&db, &path).await {
-        return Ok(ApiResponse::err(e));
-    }
-
-    let (music_folder, secondary_targets) = get_music_folder_and_targets(&db).await?;
-
-    // 1. DB 查封面
-    match db.get_song_cover(&path).await {
-        Ok(Some(cover)) if !cover.is_empty() => Ok(ApiResponse::ok(Some(cover))),
-        Ok(_) => {
-            // 2. Fallback: 从音频提取 + 同目录查找
-            match extract_cover_with_fallback(&db, &path, &music_folder, &secondary_targets).await {
-                Some(cover) => Ok(ApiResponse::ok(Some(cover))),
-                None => Ok(ApiResponse::ok(None)),
-            }
-        }
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
-
 async fn find_fallback_cover(
     song_path: &str,
     music_folder: &str,
@@ -183,9 +158,24 @@ fn find_fallback_cover_blocking(
     const EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp"];
 
     fn find_cover_in_dir(dir: &Path, names: &[&str]) -> Option<String> {
+        // 与嵌入封面同上限（metadata.rs 的 MAX_EMBEDDED_COVER_BYTES）：
+        // 同目录下的 cover.jpg 可能是任意大文件，直接 base64 会让整幅图进 DB/IPC
+        const MAX_COVER_BYTES: usize = 5 * 1024 * 1024;
+
         for name in names {
             for ext in EXTENSIONS {
                 let cover_path = dir.join(format!("{}.{}", name, ext));
+                // 用 metadata 先探大小，超限跳过而不是读进内存再判断
+                if let Ok(meta) = std::fs::metadata(&cover_path) {
+                    if meta.len() as usize > MAX_COVER_BYTES {
+                        tracing::debug!(
+                            "Skipping fallback cover {:?}: {} bytes exceeds limit",
+                            cover_path,
+                            meta.len()
+                        );
+                        continue;
+                    }
+                }
                 if let Ok(bytes) = std::fs::read(&cover_path) {
                     return Some(base64::engine::general_purpose::STANDARD.encode(&bytes));
                 }
@@ -338,22 +328,6 @@ pub async fn get_song_covers_batch(
 }
 
 #[tauri::command]
-pub async fn get_thumbnail_info() -> Result<ApiResponse<ThumbnailInfo>, String> {
-    let (small_count, large_count, size_bytes) = tokio::task::spawn_blocking(|| {
-        let (small_count, large_count) = crate::thumbnail::get_thumbnails_count();
-        let size_bytes = crate::thumbnail::get_thumbnails_size();
-        (small_count, large_count, size_bytes)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(ApiResponse::ok(ThumbnailInfo {
-        small_count,
-        large_count,
-        size_bytes,
-    }))
-}
-
-#[tauri::command]
 pub async fn get_liked_paths(db: State<'_, Database>) -> Result<ApiResponse<Vec<String>>, String> {
     match db.get_liked_paths().await {
         Ok(paths) => Ok(ApiResponse::ok(paths)),
@@ -429,28 +403,5 @@ pub async fn scan_folder(
     match crate::scanner::scan_and_persist(&db, &path, scope, &app_handle).await {
         Ok(result) => Ok(ApiResponse::ok(result)),
         Err(e) => Ok(ApiResponse::err(e.to_string())),
-    }
-}
-
-#[tauri::command]
-pub async fn search_songs(
-    db: State<'_, Database>,
-    query: String,
-) -> Result<ApiResponse<Vec<Song>>, String> {
-    match db.search_songs(&query).await {
-        Ok(songs) => Ok(ApiResponse::ok(songs)),
-        Err(e) => Ok(ApiResponse::err(e)),
-    }
-}
-
-#[tauri::command]
-pub async fn delete_song(db: State<'_, Database>, path: String) -> Result<ApiResponse<()>, String> {
-    if let Err(e) = validate_path_in_music_folder(&db, &path).await {
-        return Ok(ApiResponse::err(e));
-    }
-
-    match db.delete_song(&path).await {
-        Ok(_) => Ok(ApiResponse::ok(())),
-        Err(e) => Ok(ApiResponse::err(e)),
     }
 }

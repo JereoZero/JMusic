@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_log;
 mod commands;
 mod constants;
 mod database;
@@ -44,13 +45,18 @@ fn set_dark_window_appearance(window: &tauri::WebviewWindow) {
 }
 
 fn main() {
-    // 初始化日志
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("jlocal=info".parse().expect("invalid jlocal log directive"))
-                .add_directive("tauri=info".parse().expect("invalid tauri log directive")),
-        )
+    // 初始化日志：
+    // - fmt() 保留控制台输出（开发/排查时看终端）
+    // - LogLayer 把事件额外收进内存环形缓冲，供设置页「日志」标签读取
+    //   （此前 app_logs 表零写入方，日志面板永远为空）
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive("jlocal=info".parse().expect("invalid jlocal log directive"))
+        .add_directive("tauri=info".parse().expect("invalid tauri log directive"));
+    use tracing_subscriber::prelude::*;
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(app_log::LogLayer)
         .init();
 
     info!("Starting JlocalMusic v{}", env!("CARGO_PKG_VERSION"));
@@ -142,15 +148,12 @@ fn main() {
             commands::get_last_played_song,
             commands::get_song_cover,
             commands::get_song_cover_large,
-            commands::get_song_cover_full,
             commands::get_song_covers_batch,
             commands::get_liked_paths,
             commands::get_liked_songs,
             commands::toggle_like,
             commands::clear_liked_songs,
             commands::scan_folder,
-            commands::search_songs,
-            commands::delete_song,
             // 播放控制
             commands::play_song,
             commands::pause_song,
@@ -158,10 +161,6 @@ fn main() {
             commands::stop_song,
             commands::seek_song,
             commands::set_volume,
-            commands::get_player_state,
-            // 元数据
-            commands::get_metadata,
-            commands::get_metadata_batch,
             // 隐藏歌曲管理
             commands::hide_song,
             commands::unhide_song,
@@ -169,38 +168,20 @@ fn main() {
             commands::hide_songs_batch,
             commands::unhide_songs_batch,
             commands::clear_hidden_songs,
-            commands::get_hidden_count,
-            commands::is_song_hidden,
             // 设置管理
-            commands::get_setting,
             commands::set_setting,
-            commands::get_all_settings,
-            // 文件操作
-            commands::check_file_exists,
-            // 喜欢歌曲查询
-            commands::is_song_liked,
-            // 隐藏歌曲完整信息
-            commands::get_hidden_songs,
             // 日志管理
-            commands::add_log,
             commands::get_logs,
-            commands::get_error_logs,
             commands::clear_logs,
-            commands::get_log_count,
             commands::get_logs_as_text,
             // 播放历史
             commands::add_play_history,
             commands::get_play_history,
             commands::clear_play_history,
-            commands::get_play_counts,
-            commands::get_song_play_count,
-            commands::cleanup_nonexistent_songs,
-            // 文件夹选择
-            commands::select_folder,
             // 歌词
             commands::get_lyrics,
-            // 缩略图
-            commands::get_thumbnail_info,
+            // 文件夹选择
+            commands::select_folder,
             // 符号链接管理
             commands::get_primary_music_folder,
             commands::add_secondary_folder,

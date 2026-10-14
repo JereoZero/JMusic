@@ -1,5 +1,63 @@
+use crate::constants::is_playable_extension;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
+
+/// 判断「目录存在且看起来是个音乐库」——**删除曲库记录前的护栏**。
+///
+/// # 为什么需要它
+///
+/// 更换音乐文件夹会把「不在新目录下」的歌曲记录连同喜欢/播放历史**永久删除**
+/// （经 FK `ON DELETE CASCADE`）。此前的护栏只判断「新路径是目录」，而系统选择器
+/// 选中的目录**必然**是目录 —— 所以用户**选错一个空目录**时护栏完全无效：
+/// 所有歌曲都不在新目录下 → 整库记录被删光，而喜欢与播放历史是纯数据库数据、
+/// 不可恢复（音频文件本身还在磁盘上）。
+///
+/// 判定升级为：目录下**至少存在一个可播放音频文件**。命中即返回，不做全量遍历。
+///
+/// # 失败方向是安全的
+///
+/// 判定不通过时**跳过清理**，后果只是「旧目录的记录暂时留在列表里」（成为
+/// 操作被拒的僵尸条目），等目录真正有内容后再扫一次即可自动清掉；
+/// 而不加护栏的失败方向是**不可恢复的数据丢失**。
+///
+/// 遍历有界：深度上限 [`AUDIO_SEARCH_MAX_DEPTH`]，跳过隐藏目录与 `@eaDir`，
+/// 不跟随符号链接（避免成环），命中首个音频文件即停止。
+pub const AUDIO_SEARCH_MAX_DEPTH: usize = 6;
+
+pub fn folder_contains_audio(folder: &std::path::Path) -> bool {
+    if !folder.is_dir() {
+        return false;
+    }
+
+    use walkdir::WalkDir;
+    for entry in WalkDir::new(folder)
+        .max_depth(AUDIO_SEARCH_MAX_DEPTH)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_string_lossy();
+            !name.starts_with('.') && name != "@eaDir"
+        })
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let is_audio = entry
+            .path()
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(is_playable_extension)
+            .unwrap_or(false);
+        if is_audio {
+            return true;
+        }
+    }
+    false
+}
 
 /// 获取应用数据目录
 ///

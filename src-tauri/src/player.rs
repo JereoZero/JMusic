@@ -25,16 +25,6 @@ fn amplitude_to_decibels(amplitude: f32) -> Decibels {
     }
 }
 
-/// kira PlaybackState → 项目 PlaybackState 映射。
-fn map_kira_state(state: KiraPlaybackState) -> PlaybackState {
-    match state {
-        KiraPlaybackState::Stopped => PlaybackState::Stopped,
-        KiraPlaybackState::Paused | KiraPlaybackState::WaitingToResume => PlaybackState::Paused,
-        // Playing/Pausing/Resuming/Stopping 都视为播放中
-        _ => PlaybackState::Playing,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, TS)]
 #[ts(export)]
 pub enum PlaybackState {
@@ -406,27 +396,9 @@ impl AudioPlayer {
     }
 
     /// 轻量获取 duration，仅读 state 不同步 kira、不 clone PlayerState
-    /// 用于 seek 校验等只需 duration 的场景，避免 get_state() 的 handle lock + write + clone 开销
+    /// 用于 seek 校验等只需 duration 的场景，避免 handle lock + write + clone 开销
     pub async fn get_duration(&self) -> Option<f64> {
         self.state.read().await.duration
-    }
-
-    pub async fn get_state(&self) -> PlayerState {
-        // 同步 kira 实际状态到 PlayerState（处理 Stopping 等中间态）
-        let kira_state = {
-            let handle_guard = self.handle.lock().await;
-            handle_guard.as_ref().map(|h| h.state())
-        };
-        // 一次 write 锁完成"同步 + 返回快照"，省去后续 read 锁
-        let mut st = self.state.write().await;
-        if let Some(ks) = kira_state {
-            let mapped = map_kira_state(ks);
-            // 仅在状态发生变化时更新（避免频繁写锁）
-            if st.state != mapped {
-                st.state = mapped;
-            }
-        }
-        st.clone()
     }
 }
 
@@ -483,71 +455,5 @@ mod tests {
         let db_high = amplitude_to_decibels(1.0).0;
         assert!(db_low < db_mid);
         assert!(db_mid < db_high);
-    }
-
-    // ===== map_kira_state =====
-
-    #[test]
-    fn map_kira_state_playing_variants_to_playing() {
-        // Playing/Pausing/Resuming/Stopping 都视为播放中
-        assert_eq!(
-            map_kira_state(KiraPlaybackState::Playing),
-            PlaybackState::Playing
-        );
-        assert_eq!(
-            map_kira_state(KiraPlaybackState::Pausing),
-            PlaybackState::Playing
-        );
-        assert_eq!(
-            map_kira_state(KiraPlaybackState::Resuming),
-            PlaybackState::Playing
-        );
-        assert_eq!(
-            map_kira_state(KiraPlaybackState::Stopping),
-            PlaybackState::Playing
-        );
-    }
-
-    #[test]
-    fn map_kira_state_paused_variants_to_paused() {
-        // Paused / WaitingToResume 视为暂停
-        assert_eq!(
-            map_kira_state(KiraPlaybackState::Paused),
-            PlaybackState::Paused
-        );
-        assert_eq!(
-            map_kira_state(KiraPlaybackState::WaitingToResume),
-            PlaybackState::Paused
-        );
-    }
-
-    #[test]
-    fn map_kira_state_stopped_to_stopped() {
-        assert_eq!(
-            map_kira_state(KiraPlaybackState::Stopped),
-            PlaybackState::Stopped
-        );
-    }
-
-    #[test]
-    fn map_kira_state_covers_all_seven_variants() {
-        // 确保所有 kira PlaybackState 变体都被映射（防止未来新增变体遗漏）
-        let all = [
-            KiraPlaybackState::Playing,
-            KiraPlaybackState::Pausing,
-            KiraPlaybackState::Paused,
-            KiraPlaybackState::WaitingToResume,
-            KiraPlaybackState::Resuming,
-            KiraPlaybackState::Stopping,
-            KiraPlaybackState::Stopped,
-        ];
-        for state in all {
-            let mapped = map_kira_state(state);
-            // 映射结果必须是三种有效状态之一
-            assert!(matches!(
-                mapped,
-                PlaybackState::Playing | PlaybackState::Paused | PlaybackState::Stopped
-            ));
-        }
     }
 }

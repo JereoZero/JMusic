@@ -8,7 +8,11 @@ use std::sync::Mutex;
 
 /// 白名单递归收集的最大深度，与 scanner 的 `max_depth(50)` 保持一致，
 /// 避免病态深的目录树拖慢校验（本函数在每个带路径的命令里都会被调用）。
-const MAX_SECONDARY_SCAN_DEPTH: usize = 50;
+///
+/// `pub` 是为了 [`crate::commands::misc::get_secondary_folders`] 复用同一个上限：
+/// 界面列出链接的深度若大于白名单收集的深度，就会出现「链接列得出来、
+/// 但其下歌曲校验不通过」的口径不一致。
+pub const MAX_SECONDARY_SCAN_DEPTH: usize = 50;
 
 /// 二级文件夹白名单的进程内缓存：(music_folder, targets)。
 ///

@@ -28,13 +28,6 @@ impl<T> ApiResponse<T> {
     }
 }
 
-#[derive(Serialize)]
-pub struct ThumbnailInfo {
-    pub small_count: usize,
-    pub large_count: usize,
-    pub size_bytes: u64,
-}
-
 /// 统一获取 music_folder 和二级文件夹符号链接目标，用于路径安全校验
 ///
 /// 取值必须与 [`crate::paths::resolve_music_folder`] 对「已配置」的判断一致：

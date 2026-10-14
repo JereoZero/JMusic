@@ -44,8 +44,18 @@ vi.mock('../../hooks/useSongCover', () => ({
   useSongCover: () => ({ cover: null, isLoading: false }),
 }))
 
-vi.mock('../../api/modules', () => ({
-  getLyrics: vi.fn().mockResolvedValue(null),
+// LyricsView 用的是 `import api from '../api'`（default 导出），mock 这条路径。
+// 用普通函数而非 vi.fn().mockResolvedValue：setup.ts 的 afterEach 有 vi.restoreAllMocks()，
+// 会清掉 vi.fn 的实现（此前靠已删除的 mock-api 兜底数据掩盖了这一问题）。
+vi.mock('../../api', () => ({
+  default: {
+    getLyrics: () =>
+      Promise.resolve({
+        type: 'embedded' as const,
+        content: `[00:00.00]这是第一句歌词
+[00:05.00]这是第二句歌词`,
+      }),
+  },
 }))
 
 describe('LyricsView', () => {
@@ -56,7 +66,7 @@ describe('LyricsView', () => {
     expect(screen.getByText(/专辑：.*Test Album/)).toBeInTheDocument()
     expect(screen.getByText(/歌手：.*Test Artist/)).toBeInTheDocument()
 
-    // 等待异步歌词加载完成（mockApi 返回歌词内容），flush 状态更新避免 act() 警告
+    // 等待异步歌词加载完成（getLyrics mock 返回歌词内容），flush 状态更新避免 act() 警告
     await waitFor(() => {
       expect(screen.getByText('这是第一句歌词')).toBeInTheDocument()
     })
@@ -66,7 +76,7 @@ describe('LyricsView', () => {
     render(<LyricsView onClose={() => {}} />)
 
     await waitFor(() => {
-      expect(screen.getByText(/加载歌词中|暂无歌词|这是第一句歌词/)).toBeInTheDocument()
+      expect(screen.getByText(/加载歌词中|这是第一句歌词/)).toBeInTheDocument()
     })
   })
 })

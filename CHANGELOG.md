@@ -2,6 +2,35 @@
 
 All notable changes to JlocalMusic will be documented in this file.
 
+## v0.9.6 (2026-10-14)
+
+> 承接 v0.9.5：修复上一轮遗留的清理护栏问题与后端功能逻辑隐患，并做一次**死代码清理**（前端旧测试脚手架 + 后端零调用命令 + FTS5 死基建），同时修复「日志面板永远为空」的功能失效。
+
+### 🔴 数据安全与功能修复
+
+- 修复**清理护栏对「选错空目录」完全无效（整库不可恢复删除风险）** — v0.9.5 新增的护栏只判「新路径是目录」，而系统选择器选中的必然就是目录：用户选错一个空目录 → 所有歌曲判为范围外 → 整库记录连同喜欢/播放历史经 FK 级联**永久删光**（音频文件还在，纯数据库数据不可恢复）。护栏升级为「新目录至少含一个可播放音频文件」，并下沉到唯一删除入口 `cleanup_songs_outside_folder`（设置页与启动扫描两个调用点自动覆盖，避免只修调用方、被跳过的清理在下次启动时补删）
+- 修复 **日志面板永远显示「暂无日志」（功能失效）** — 设置页有完整的日志查看/筛选/复制功能，但 `app_logs` 表的唯一写入方 `add_log` 命令后端从未调用，tracing 全走控制台 → 表零写入。改为 tracing `LogLayer` 直接捕获事件进**有界内存环形缓冲**（500 条上限，任意 `info!/warn!/error!` 自动进面板，无需逐处插桩）；顺带解决旧方案的**无上限轮转隐患**，并 drop 掉从未有数据的 `app_logs` 表（迁移 16）
+- 修复 `get_lyrics` / `hide_songs_batch` / `unhide_songs_batch` 三个命令**绕过统一入口**（D2 修复的漏网点）— 各自直接读 DB 且只判 `Ok(None)`，空串配置时返回误导性的 "Access denied" 而非 "Music folder not configured"。统一改走 `get_music_folder_and_targets`
+- 修复**深层符号链接可播放但无法在界面管理** — `get_secondary_folders` 只扫一级、`remove_secondary_link` 只接受单组件名，而白名单递归收集 → `Artist/Album/link` 下的歌曲能播，却无入口移除。改为递归收集（复用白名单的 `MAX_SECONDARY_SCAN_DEPTH`，本轮同时修掉首版未设上限导致的口径不一致）+ 多组件安全删除；修复过程自查出一个**越界删除漏洞**：`symlink_metadata` 只对末段不跟随，中间段是链接时 `link_path` 会落到主目录外，已加「中间段必须真实目录」拦截（+回归测试）
+- 修复 `add_secondary_folder` **重名检测对悬空链接失效** — `exists()` 跟随链接，同名悬空链接被判为可用 → `symlink()` 报 EEXIST，用户只看到「创建符号链接失败」且得不到自动改名。改用 `symlink_metadata`
+- 修复 **fallback 封面无大小上限** — 嵌入封面有 5MB 限制，但同目录 `cover.jpg` 等直接读入并 base64 入库；改先探大小，超限跳过
+
+### 🧹 死代码清理（删除前经零调用核查）
+
+- **前端**：删除 `mock-api.ts`（357 行，浏览器非 Tauri 环境的假数据脚手架）及 `api/index.ts` 运行时分支，入口改纯 re-export；删除 4 个死类型导出（`BackendPlayerState`/`Metadata`/`PlaybackState`/`ThumbnailInfo`）
+- **后端命令**：删除 20 个零调用命令（`search_songs`/`delete_song`/`get_metadata`/`get_metadata_batch`/`get_player_state`/`get_setting`/`get_all_settings`/`check_file_exists`/`is_song_liked`/`is_song_hidden`/`get_hidden_songs`/`get_hidden_count`/`add_log`/`get_error_logs`/`get_log_count`/`get_play_counts`/`get_song_play_count`/`cleanup_nonexistent_songs`/`get_thumbnail_info`/`get_song_cover_full`）及配套 DB 方法、`ThumbnailInfo`、`get_state`/`map_kira_state`、缩略图统计函数；4 个仍有回归测试价值的 DB 方法改为 `#[cfg(test)]`（生产不编译）
+- **FTS5 死基建**：删除 `search_songs` + `fts_phrase_query`，迁移 15 drop `songs_fts` 表与 3 个触发器 — 前端搜索走内存过滤，后端这条链路零调用，但每次落库仍在维护没人查询的倒排索引（外部内容表不存歌曲数据，drop 不丢数据）
+- **测试修复**：`LyricsView.test.tsx` 的 mock 路径失效（mock 子模块而组件用 default 导出）且 `mockResolvedValue` 被 `vi.restoreAllMocks()` 清掉，此前一直靠已删除的 mock-api 兜底数据掩盖；`libraryStore.test.ts` 存在指向不存在文件的 `vi.mock`
+
+### ⚡ 效率与构建
+
+- 修复 **vite 拆包配置错误（React 本体被拆进 icons-vendor）** — `manualChunks` 对象形态匹配失灵，`react-vendor` 只剩 3.9 kB。改按 `node_modules` 路径精确匹配的函数形态（含 `scheduler`），**入口 main chunk 429.9 kB → 240.9 kB（gzip 133.0 → 73.9 kB，-44%）**，React 运行时独立缓存
+- 顺带修复 3 处 clippy 告警与 2 处多余借用
+
+### 📈 测试
+
+- 后端 **119 → 109**（随 FTS5/死代码删除 16 个，新增日志缓冲 6 个、护栏 2 个、嵌套链接 1 个）、前端 **157**；`cargo clippy -D warnings` 0 warning、`cargo fmt --check` 0 diff、`tsc` / `eslint` / `prettier` 全绿、`vite build` 通过
+
 ## v0.9.5 (2026-09-23)
 
 > 承接 v0.9.4：对后端做了一次功能逻辑审计（全部 21 个源文件 + 13 个 migration），修复 4 个 🔴 + 9 个 🟠；随后做了一轮**以实测数字驱动**的效率专项优化。

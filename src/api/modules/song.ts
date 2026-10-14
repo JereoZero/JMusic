@@ -1,5 +1,5 @@
 import { invokeApi } from './types'
-import type { ScanFolderResult, ThumbnailInfo } from './types'
+import type { ScanFolderResult } from './types'
 import type { Song } from '../../types'
 
 export async function getSongs(): Promise<Song[]> {
@@ -11,17 +11,9 @@ export async function getLastPlayedSong(): Promise<Song | null> {
   return (await invokeApi<Song | null>('get_last_played_song')) ?? null
 }
 
-export async function searchSongs(query: string): Promise<Song[]> {
-  return (await invokeApi<Song[]>('search_songs', { query })) ?? []
-}
-
 export async function scanFolder(path: string): Promise<ScanFolderResult> {
   // 扫描可能耗时较长（大音乐库），使用 5 分钟超时
   return await invokeApi<ScanFolderResult>('scan_folder', { path }, 300_000)
-}
-
-export async function deleteSong(path: string): Promise<void> {
-  await invokeApi<void>('delete_song', { path })
 }
 
 export async function getSongCoverLarge(path: string): Promise<string | null> {
@@ -54,8 +46,4 @@ export async function getSongCoversBatch(paths: string[]): Promise<Record<string
     if (cover) result[path] = cover
   }
   return result
-}
-
-export async function getThumbnailInfo(): Promise<ThumbnailInfo> {
-  return await invokeApi<ThumbnailInfo>('get_thumbnail_info')
 }

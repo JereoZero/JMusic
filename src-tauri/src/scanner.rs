@@ -346,7 +346,7 @@ impl FolderScanner {
             // 原实现对每个文件做了 is_file() + canonicalize() + metadata() 三套系统调用，
             // 其中 canonicalize 要逐级解析路径上每个组件，实测比 stat 贵约 5.8 倍
             // （6000 文件：realpath 577ms vs stat 99ms）—— 而这些信息一次 stat 全都有。
-            let metadata = match std::fs::metadata(&path) {
+            let metadata = match std::fs::metadata(path) {
                 Ok(m) => m,
                 Err(e) => {
                     // stat 失败（权限不足 / 竞态删除）→ 跳过。入库了也打不开该文件。
@@ -359,7 +359,7 @@ impl FolderScanner {
                 continue;
             }
 
-            if !visited.insert(file_id(&path, &metadata)) {
+            if !visited.insert(file_id(path, &metadata)) {
                 continue;
             }
 
